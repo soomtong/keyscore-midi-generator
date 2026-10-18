@@ -261,50 +261,91 @@ struct ContentView: View {
             TextField("분위기 (선택, 예: calm night jazz)", text: $m.mood)
                 .textFieldStyle(.roundedBorder).controlSize(.small)
                 .focused($focus, equals: .mood)
-            rhythmSection
-            HStack {
-                Button { m.generate() } label: {
+            // 두 파트를 2단으로. 두 열은 같은 폭이고 높이도 맞춘다.
+            HStack(alignment: .top, spacing: 12) {
+                secondPartSection
+                Divider().overlay(Theme.stroke)
+                rhythmSection
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 곡 정보 LCD 오른쪽 끝의 생성 버튼. 생성 중에도 폭이 같고, 다시 전개 버튼은 곡이 없으면 비활성으로 자리를 지킨다.
+    private var generateButtons: some View {
+        HStack(spacing: 6) {
+            Button { m.rebuildAndPlay() } label: { Image(systemName: "arrow.clockwise") }
+                .controlSize(.small).focusable(false)
+                .disabled(m.arrangement == nil || m.isGenerating)
+                .help("현재 설정(템포·길이·채널·패턴)으로 다시 전개")
+            Button { m.generate() } label: {
+                HStack(spacing: 4) {
                     if m.isGenerating {
-                        HStack { ProgressView().controlSize(.small); Text("생성 중…") }
+                        ProgressView().controlSize(.mini)
+                        Text("생성 중…")
                     } else {
-                        Label("곡 생성", systemImage: "wand.and.stars")
+                        Image(systemName: "wand.and.stars")
+                        Text("곡 생성")
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(m.isGenerating)
-                KeyCap("⌘G", .play)
-                if m.arrangement != nil {
-                    Button("현재 설정으로 다시 전개") { m.rebuildAndPlay() }
-                }
+                .frame(width: 72)
             }
+            .buttonStyle(.borderedProminent).focusable(false)
+            .disabled(m.isGenerating)
+            KeyCap("⌘G", .play)
+        }
+    }
+
+    /// 두 번째 파트(리프)와 채널.
+    private var secondPartSection: some View {
+        partSection(title: "SECOND PART", key: "R", note: "리프는 곡 생성 시 LLM 이 쓰며, 멜로디 밑에 깔리지 않습니다") {
+            DarkMenu(items: SecondPart.allCases.map { ($0, $0.rawValue) }, selection: $m.secondPart)
+        } channel: {
+            ChannelStepper(title: "CH", channel: $m.secondChannel)
+        } summary: {
+            m.secondPart.summary
         }
     }
 
     /// 리듬(드럼) 패턴과 채널. General MIDI 드럼 노트를 보낸다.
-    /// 메뉴/채널 폭을 고정하고 설명은 한 줄로 잘라, 패턴이나 채널을 바꿔도 레이아웃이 흔들리지 않게 한다.
     private var rhythmSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        partSection(title: "RHYTHM", key: "D", note: "GM 드럼 맵 (보통 ch 10, 8채널 악기는 8) · 섹션별 강약과 필인은 생성 시 LLM 이 정함") {
+            DarkMenu(items: DrumPattern.allCases.map { ($0, $0.rawValue) }, selection: $m.drumPattern)
+        } channel: {
+            ChannelStepper(title: "CH", channel: $m.rhythmChannel)
+        } summary: {
+            m.drumPattern.summary
+        }
+    }
+
+    /// 채널 하나를 쓰는 파트 열. 메뉴는 열 폭을 채우고 채널 폭은 고정, 설명은 한 줄로 잘라
+    /// 패턴이나 채널을 바꿔도 레이아웃이 흔들리지 않게 한다.
+    private func partSection<M: View, C: View>(title: String, key: String, note: String,
+                                               @ViewBuilder menu: () -> M, @ViewBuilder channel: () -> C,
+                                               summary: () -> String) -> some View {
+        let text = summary()
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 6) {
-                Text("RHYTHM").font(.system(size: 10, weight: .bold)).tracking(0.8).foregroundStyle(.secondary)
+                Text(title).font(.system(size: 10, weight: .bold)).tracking(0.8).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                KeyCap("D", .setting)
-                KeyCap("⇧D", .setting)
-                Text("패턴").font(.caption2).foregroundStyle(.tertiary)
+                KeyCap(key, .setting)
+                KeyCap("⇧" + key, .setting)
+                Text("선택").font(.caption2).foregroundStyle(.tertiary)
             }
             HStack(spacing: 12) {
-                DarkMenu(items: DrumPattern.allCases.map { ($0, $0.rawValue) }, selection: $m.drumPattern, width: 180)
-                    .frame(width: 180)
-                ChannelStepper(title: "CH", channel: $m.rhythmChannel)
-                    .help("리듬 채널 — 설정(⌘,)에서도 바꿀 수 있습니다")
-                Text(m.drumPattern.summary)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
-                    .help(m.drumPattern.summary)
-                Spacer(minLength: 0)
+                menu()
+                channel().help("\(title) 채널 — 설정(⌘,)에서도 바꿀 수 있습니다")
             }
-            Text("General MIDI 드럼 맵 · 보통 16채널 악기는 10번, 8채널 악기는 8번")
+            Text(text)
+                .font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+                .help(text)
+            Text(note)
                 .font(.caption2).foregroundStyle(.tertiary)
+                .lineLimit(1).truncationMode(.tail)
+                .help(note)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var lengthSection: some View {
@@ -318,19 +359,22 @@ struct ContentView: View {
                 KeyCap(".", .setting)
                 Text("길이").font(.caption2).foregroundStyle(.tertiary)
             }
-            HStack(spacing: 0) {
-                LCDField(label: "LENGTH", value: AppModel.lengthLabel(m.minutes), width: 80)
-                LCDDivider()
-                LCDField(label: "BARS", value: "\(m.targetBars)", width: 64)
-                LCDDivider()
-                LCDField(label: "SECTIONS", value: layout.isEmpty ? "–" : "\(layout.count)", width: 84)
-                LCDDivider()
-                LCDField(label: "FORM", value: order.isEmpty ? "–" : order.joined(separator: " "), width: 220)
+            HStack(spacing: 10) {
+                HStack(spacing: 0) {
+                    LCDField(label: "LENGTH", value: AppModel.lengthLabel(m.minutes), width: 80)
+                    LCDDivider()
+                    LCDField(label: "BARS", value: "\(m.targetBars)", width: 64)
+                    LCDDivider()
+                    LCDField(label: "SECTIONS", value: layout.isEmpty ? "–" : "\(layout.count)", width: 84)
+                    LCDDivider()
+                    LCDField(label: "FORM", value: order.isEmpty ? "–" : order.joined(separator: " "), width: 220)
+                }
+                .padding(.vertical, 4)
+                .background(Theme.lcd, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.6)))
+                Spacer(minLength: 8)
+                generateButtons
             }
-            .padding(.vertical, 4)
-            .background(Theme.lcd, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.6)))
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             LengthRuler(minutes: $m.minutes, landmarks: AppModel.lengthLandmarks)
                 .frame(height: 42)
@@ -443,6 +487,7 @@ struct ContentView: View {
                         ChannelStepper(title: "MELODY", channel: $m.melodyChannel)
                         ChannelStepper(title: "CHORD", channel: $m.chordChannel)
                         ChannelStepper(title: "BASS", channel: $m.bassChannel)
+                        ChannelStepper(title: "2ND", channel: $m.secondChannel)
                         ChannelStepper(title: "RHYTHM", channel: $m.rhythmChannel)
                         Spacer(minLength: 0)
                     }
@@ -856,7 +901,7 @@ private struct ShortcutLegend: View {
         ]),
         Group(group: .setting, title: "곡 설정", items: [
             Item(["H L", "← →"], "템포"), Item(["⇧"], "템포 ±5 (누른 채)"), Item(["K J", "↑ ↓"], "Key"), Item(["[ ]"], "Scale"),
-            Item(["1–5"], "복잡도"), Item([", ."], "곡 길이"), Item(["A", "⇧A"], "코드 패턴"), Item(["M", "⇧M"], "멜로디 패턴"), Item(["D", "⇧D"], "리듬 패턴"),
+            Item(["1–5"], "복잡도"), Item([", ."], "곡 길이"), Item(["A", "⇧A"], "코드 패턴"), Item(["M", "⇧M"], "멜로디 패턴"), Item(["R", "⇧R"], "두 번째 파트"), Item(["D", "⇧D"], "리듬 패턴"),
         ]),
     ]
 

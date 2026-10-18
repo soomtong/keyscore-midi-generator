@@ -196,6 +196,109 @@ final class KeyScoreTests: XCTestCase {
         XCTAssertTrue(ev.contains { $0.channel == 0 })  // 멜로디는 그대로 1번 채널
     }
 
+    func testRiffParsesAndPlaysOnlyWhereMelodyRests() throws {
+        let json = """
+        {"title":"T","form":["A"],"sections":{
+          "A":{"bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[[0,61,5],[8,72,1]],
+               "riff":{"bars":2,"notes":[[0,60,0.5],[1,84,0.5],[2,67,0.5],[6,64,1],[9,50,1]]}}}}
+        """
+        let arr = try Generator.parse(json)
+        let sec = try XCTUnwrap(arr.sections["A"])
+        XCTAssertEqual(sec.riffBars, 2)
+        XCTAssertEqual(sec.riff.count, 5)
+
+        // 멜로디가 시작하는 0·2마디에는 리프가 없고, 쉬는 1·3마디에만 나온다
+        let riff = SecondPart.riffNotes(sec, start: 0, beats: 16, channel: 3)
+        XCTAssertFalse(riff.isEmpty)
+        XCTAssertTrue(riff.allSatisfy { (4..<8).contains($0.start) || (12..<16).contains($0.start) })
+        XCTAssertTrue(riff.contains { $0.start == 4 && $0.pitch == 48 })  // 이어지는 멜로디(61)와 반음 충돌 → 옥타브 아래
+        XCTAssertTrue(riff.contains { $0.start == 5 && $0.pitch == 72 })  // 84 는 음역 안으로 접힘
+        XCTAssertFalse(riff.contains { $0.pitch == 64 })  // 빈 마디가 하나뿐이면 2마디 리프의 앞 마디만
+        XCTAssertFalse(riff.contains { $0.pitch == 50 })  // 리프 길이 밖의 음은 무시
+        XCTAssertTrue(riff.allSatisfy { $0.velocity == 74 })
+
+        // 멜로디가 없는 간주 섹션은 처음부터 끝까지, 더 세게
+        var interlude = sec
+        interlude.melody = []
+        let lead = SecondPart.riffNotes(interlude, start: 32, beats: 16, channel: 3)
+        XCTAssertEqual(lead.filter { $0.pitch == 64 }.map(\.start), [38, 46])
+        XCTAssertTrue(lead.allSatisfy { $0.velocity == 84 && $0.start >= 32 })
+
+        // Off 이면 리프 데이터가 있어도 보내지 않는다
+        var o = ArrangeOptions(bpm: 120, minutes: 0.5)
+        o.channels.second = 5
+        XCTAssertFalse(Arranger.build(arr, options: o).events.contains { $0.channel == 4 })
+        o.secondPart = .riff
+        XCTAssertTrue(Arranger.build(arr, options: o).events.contains { $0.channel == 4 })
+    }
+
+    func testPromptAsksRiffAndInterludeOnlyForRiff() {
+        var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
+        let off = Generator.prompt(r)
+        XCTAssertFalse(off.contains("\"riff\""))
+        XCTAssertFalse(off.contains("riff:"))
+        XCTAssertFalse(off.contains("interlude:"))
+        r.secondPart = .riff
+        let riff = Generator.prompt(r)
+        XCTAssertTrue(riff.contains("\"riff\": {\"bars\""))
+        XCTAssertTrue(riff.contains("NOT played under the melody"))
+        XCTAssertTrue(riff.contains("interlude:"))
+    }
+
+    func testDrumEnergyLightAndFill() {
+        let full = DrumPattern.rock.notes(start: 0, beats: 8, channel: 9)
+        XCTAssertTrue(DrumPattern.rock.notes(start: 0, beats: 8, channel: 9, crashOnStart: true, energy: .none).isEmpty)
+        let light = DrumPattern.rock.notes(start: 0, beats: 8, channel: 9, energy: .light)
+        XCTAssertFalse(light.contains { $0.pitch == DrumPattern.Kit.snare })  // 백비트는 사이드스틱으로
+        XCTAssertTrue(light.contains { $0.pitch == DrumPattern.Kit.sideStick })
+        XCTAssertEqual(light.filter { $0.pitch == DrumPattern.Kit.kick }.count, 2)  // 마디마다 첫 박만
+        XCTAssertLessThan(light.map(\.velocity).reduce(0, +), full.map(\.velocity).reduce(0, +))
+
+        let fill = DrumPattern.funk.notes(start: 0, beats: 8, channel: 9, fill: true)
+        let toms = [DrumPattern.Kit.floorTom, DrumPattern.Kit.lowTom, DrumPattern.Kit.midTom, DrumPattern.Kit.highTom]
+        XCTAssertTrue(fill.filter { toms.contains($0.pitch) }.allSatisfy { $0.start >= 6 && $0.start < 8 })  // 마지막 마디 후반 두 박
+        XCTAssertFalse(fill.contains { $0.pitch == DrumPattern.Kit.closedHat && $0.start >= 6 })
+        XCTAssertTrue(fill.allSatisfy { (35...59).contains($0.pitch) && $0.start < 8 })
+        // 절반 박자만 남은 짧은 섹션에는 필인을 넣지 않는다
+        XCTAssertFalse(DrumPattern.rock.notes(start: 0, beats: 2, channel: 9, fill: true).contains { toms.contains($0.pitch) })
+    }
+
+    func testDrumPlanParsesAndCrashesOnlyWhenRising() throws {
+        let json = """
+        {"title":"T","form":["I","V","C","O"],"sections":{
+          "I":{"bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[],"drums":{"energy":"none"}},
+          "V":{"bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[],"drums":{"energy":"Light","fill":true}},
+          "C":{"bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[],"drums":{"energy":"full"}},
+          "O":{"bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[],"drums":{"energy":"loud"}}}}
+        """
+        let arr = try Generator.parse(json)
+        XCTAssertEqual(arr.sections["I"]?.drums, DrumPlan(energy: .none))
+        XCTAssertEqual(arr.sections["V"]?.drums, DrumPlan(energy: .light, fill: true))
+        XCTAssertEqual(arr.sections["O"]?.drums, DrumPlan())  // 알 수 없는 값은 full
+
+        var o = ArrangeOptions(bpm: 120, minutes: 0.5)  // 15마디 → I V C O
+        o.drumPattern = .rock
+        let drums = Arranger.build(arr, options: o).events.filter { $0.channel == 9 }
+        XCTAssertFalse(drums.contains { $0.start < 16 })  // Intro: 드럼 없음
+        let crashes = drums.filter { $0.pitch == DrumPattern.Kit.crash }.map(\.start)
+        XCTAssertEqual(crashes, [16, 32])  // none → light, 필인 뒤 Chorus. full → full(Outro)은 크래시 없음
+    }
+
+    func testPromptAsksDrumsOnlyWhenRhythmIsOn() {
+        var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
+        let off = Generator.prompt(r)
+        XCTAssertFalse(off.contains("\"drums\""))
+        XCTAssertFalse(off.contains("groove"))
+        r.drumPattern = .shuffle
+        let on = Generator.prompt(r)
+        XCTAssertTrue(on.contains("\"drums\": {\"energy\""))
+        XCTAssertTrue(on.contains("triplet shuffle groove"))
+        XCTAssertTrue(on.contains("\"fill\": true plays a drum fill"))
+        for p in DrumPattern.allCases {
+            XCTAssertEqual(p.promptHint.isEmpty, p == .off, p.rawValue)
+        }
+    }
+
     func testSelectionShiftWrapsAround() async {
         let m = await AppModel()
         await MainActor.run {

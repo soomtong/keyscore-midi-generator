@@ -25,9 +25,23 @@ enum DrumPattern: String, CaseIterable, Identifiable {
         }
     }
 
+    /// 곡 생성 프롬프트용 영문 설명: 드럼 그루브와 그에 맞는 멜로디 프레이징.
+    var promptHint: String {
+        switch self {
+        case .off: return ""
+        case .rock: return "straight rock beat, eighth-note hi-hats and a backbeat on 2 and 4"
+        case .fourOnFloor: return "four-on-the-floor dance groove with off-beat open hi-hats: steady, repetitive phrasing fits"
+        case .ballad: return "soft half-time ballad groove: sparse, leave room for long melodic notes"
+        case .shuffle: return "triplet shuffle groove: swing the melody (off-beat eighths on triplet offsets such as 0.667)"
+        case .bossa: return "bossa nova groove with a clave-like side stick: gently syncopated, anticipated phrasing fits"
+        case .funk: return "sixteenth-note funk groove with ghost notes: short, syncopated, percussive phrasing fits"
+        }
+    }
+
     /// General MIDI 드럼 노트
     enum Kit {
         static let kick = 36, sideStick = 37, snare = 38, closedHat = 42, openHat = 46, crash = 49
+        static let floorTom = 43, lowTom = 45, midTom = 47, highTom = 50
     }
 
     struct Hit: Equatable {
@@ -70,19 +84,54 @@ enum DrumPattern: String, CaseIterable, Identifiable {
         }
     }
 
-    /// start 박부터 beats 박 동안의 드럼 노트. crashOnStart 이면 첫 박에 크래시 심벌을 더한다 (섹션 전환 표시).
-    func notes(start: Double, beats: Double, channel: UInt8, crashOnStart: Bool = false) -> [NoteEvent] {
-        guard self != .off, beats > 0 else { return [] }
-        var out: [NoteEvent] = []
-        var barIndex = 0
-        while Double(barIndex) * 4 < beats - 1e-9 {
-            let offset = Double(barIndex) * 4
-            for h in bar(barIndex) where offset + h.beat < beats - 1e-9 {
-                out.append(NoteEvent(channel: channel, pitch: h.note, velocity: h.velocity, start: start + offset + h.beat, length: 0.2))
+    /// 같은 패턴을 여리게: 하이햇·사이드스틱은 살리고, 킥은 첫 박만, 백비트 스네어는 사이드스틱으로, 고스트 노트는 뺀다.
+    static func light(_ hits: [Hit]) -> [Hit] {
+        hits.compactMap { h in
+            switch h.note {
+            case Kit.kick: return h.beat == 0 ? Hit(note: h.note, beat: h.beat, velocity: h.velocity - 24) : nil
+            case Kit.snare: return h.velocity >= 60 ? Hit(note: Kit.sideStick, beat: h.beat, velocity: h.velocity - 30) : nil
+            default: return Hit(note: h.note, beat: h.beat, velocity: max(20, h.velocity - 14))
             }
-            barIndex += 1
         }
-        if crashOnStart { out.append(NoteEvent(channel: channel, pitch: Kit.crash, velocity: 100, start: start, length: 1)) }
+    }
+
+    /// 마디 후반 두 박을 채우는 필인: 16분음표로 스네어에서 탐으로 내려오며 점점 세게.
+    static let fill: [Hit] = zip([Kit.snare, Kit.snare, Kit.snare, Kit.snare, Kit.highTom, Kit.highTom, Kit.midTom, Kit.lowTom],
+                                 0...).map { note, i in Hit(note: note, beat: 2 + Double(i) * 0.25, velocity: 70 + i * 5) }
+        + [Hit(note: Kit.kick, beat: 2, velocity: 96), Hit(note: Kit.floorTom, beat: 3.75, velocity: 108)]
+
+    /// start 박부터 beats 박 동안의 드럼 노트. crashOnStart 이면 첫 박에 크래시 심벌을 더한다 (섹션 전환 표시).
+    /// energy 는 섹션 편성(none 이면 쉼), fill 이면 마지막 마디 후반 두 박을 필인으로 바꾼다.
+    func notes(start: Double, beats: Double, channel: UInt8, crashOnStart: Bool = false,
+               energy: DrumPlan.Energy = .full, fill: Bool = false) -> [NoteEvent] {
+        guard self != .off, energy != .none, beats > 0 else { return [] }
+        let bars = Int((beats / 4).rounded(.up))
+        var out: [NoteEvent] = []
+        for barIndex in 0..<bars {
+            let offset = Double(barIndex) * 4
+            var hits = energy == .light ? Self.light(bar(barIndex)) : bar(barIndex)
+            if fill && barIndex == bars - 1 && beats - offset > 2 {
+                hits = hits.filter { $0.beat < 2 } + Self.fill
+            }
+            for h in hits where offset + h.beat < beats - 1e-9 {
+                out.append(NoteEvent(channel: channel, pitch: h.note, velocity: max(1, min(127, h.velocity)),
+                                     start: start + offset + h.beat, length: 0.2))
+            }
+        }
+        if crashOnStart { out.append(NoteEvent(channel: channel, pitch: Kit.crash, velocity: energy == .light ? 80 : 100, start: start, length: 1)) }
         return out
     }
+}
+
+/// 섹션별 드럼 편성. 곡 생성 시 LLM 이 섹션마다 정하고, 없거나 알 수 없는 값이면 full · 필인 없음.
+struct DrumPlan: Equatable {
+    enum Energy: String, Comparable {
+        case none, light, full
+
+        private var rank: Int { self == .none ? 0 : self == .light ? 1 : 2 }
+        static func < (a: Energy, b: Energy) -> Bool { a.rank < b.rank }
+    }
+
+    var energy: Energy = .full
+    var fill = false
 }

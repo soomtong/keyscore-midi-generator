@@ -43,6 +43,15 @@ final class AppModel: ObservableObject {
     @Published var melodyChannel = 1
     @Published var chordChannel = 2
     @Published var bassChannel = 3
+    @Published var secondChannel = 4
+    /// 리프는 Riff 로 생성할 때만 요청하므로, 다른 설정으로 만든 곡에서 Riff 로 바꾸면 소리가 없다는 것을 알린다.
+    @Published var secondPart: SecondPart = .off {
+        didSet {
+            let missing = secondPart == .riff && arrangement.map { $0.sections.values.allSatisfy { $0.riff.isEmpty } } == true
+            status = "두 번째 파트: \(secondPart.rawValue) (ch \(secondChannel))"
+                + (missing ? " — 이 곡에는 리프가 없습니다. Riff 로 다시 생성하세요" : "")
+        }
+    }
     @Published var rhythmChannel = 10
     @Published var drumPattern: DrumPattern = .off
 
@@ -86,7 +95,7 @@ final class AppModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     var scale: ScaleType { Theory.scales[scaleIndex] }
-    var channels: ChannelMap { ChannelMap(melody: melodyChannel, chords: chordChannel, bass: bassChannel, rhythm: rhythmChannel) }
+    var channels: ChannelMap { ChannelMap(melody: melodyChannel, chords: chordChannel, bass: bassChannel, second: secondChannel, rhythm: rhythmChannel) }
     var hasAPIKey: Bool { !apiKey.isEmpty }
 
     init() {
@@ -255,6 +264,11 @@ final class AppModel: ObservableObject {
         status = "리듬 패턴: \(drumPattern.rawValue) (ch \(rhythmChannel))"
     }
 
+    func cycleSecondPart(_ d: Int = 1) {
+        let all = SecondPart.allCases
+        secondPart = all[(all.firstIndex(of: secondPart)! + d + all.count) % all.count]
+    }
+
     func cycleChordPattern(_ d: Int = 1) {
         let all = ChordPattern.allCases
         chordPattern = all[(all.firstIndex(of: chordPattern)! + d + all.count) % all.count]
@@ -324,7 +338,7 @@ final class AppModel: ObservableObject {
         default: break
         }
         guard let key = Self.key(of: event) else { return false }
-        if event.isARepeat && !"hjkl[],.".contains(key) { return "gscfam12345".contains(key) }  // 반복 입력은 소비만
+        if event.isARepeat && !"hjkl[],.".contains(key) { return "gscfamdr12345".contains(key) }  // 반복 입력은 소비만
         switch key {
         case "h": adjustBPM(-step)  // vim: ← → ↓ ↑
         case "l": adjustBPM(step)
@@ -338,6 +352,7 @@ final class AppModel: ObservableObject {
         case "a": cycleChordPattern(shift ? -1 : 1)
         case "m": cycleMelodyStyle(shift ? -1 : 1)
         case "d": cycleDrumPattern(shift ? -1 : 1)
+        case "r": cycleSecondPart(shift ? -1 : 1)
         case "g": listen(.melody)
         // S/C/F: 듣기, Shift: 다음 선택 (⌥ 는 메뉴에서 이전 선택)
         case "s":
@@ -368,7 +383,8 @@ final class AppModel: ObservableObject {
         isGenerating = true
         status = "OpenRouter(\(model))에서 생성 중…"
         let req = GenerateRequest(root: root, scale: scale, bpm: bpm, complexity: complexity, minutes: minutes, mood: mood, melodyStyle: melodyStyle,
-                                  chordPattern: chordPattern, progression: Theory.progressions[progressionIndex])
+                                  chordPattern: chordPattern, progression: Theory.progressions[progressionIndex], secondPart: secondPart,
+                                  drumPattern: drumPattern)
         let client = OpenRouterClient(apiKey: apiKey, model: model)
         Task {
             do {
@@ -388,7 +404,7 @@ final class AppModel: ObservableObject {
     /// 현재 템포/길이/채널/패턴으로 arrangement 를 다시 전개.
     func buildSong() -> Song? {
         guard let arrangement else { return nil }
-        let opts = ArrangeOptions(bpm: bpm, minutes: minutes, channels: channels, chordPattern: chordPattern, drumPattern: drumPattern)
+        let opts = ArrangeOptions(bpm: bpm, minutes: minutes, channels: channels, chordPattern: chordPattern, drumPattern: drumPattern, secondPart: secondPart)
         return Arranger.build(arrangement, options: opts)
     }
 

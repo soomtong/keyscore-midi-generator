@@ -10,6 +10,8 @@ struct GenerateRequest {
     var melodyStyle: MelodyStyle = .free
     var chordPattern: ChordPattern = .block
     var progression: Theory.Progression? = nil
+    var secondPart: SecondPart = .off
+    var drumPattern: DrumPattern = .off
 }
 
 enum Generator {
@@ -57,6 +59,15 @@ enum Generator {
         let progression = progressionText(r)
         let scaleNotes = r.scale.intervals.map { noteNames[(r.root + $0) % 12] }.joined(separator: " ")
         let qualities = Theory.chordQualities.filter { $0.complexity <= r.complexity }.map(\.symbol).joined(separator: ", ")
+        let riff = r.secondPart == .riff
+        let drums = r.drumPattern != .off
+        let drumRules = """
+        - drums: per section choose "energy" ("none" = no drums, "light" = hi-hats and side stick only, "full" = the whole groove) to shape the form, for example a lighter intro and verses, full choruses, a quiet breakdown. "fill": true plays a drum fill in the section's last bar, leading into the next section; use it before a bigger section, not everywhere.
+        """
+        let riffRules = """
+        - riff: a short, memorable instrumental hook (1 or 2 bars) for a second instrument. It is NOT played under the melody: the host plays it only in bars where no melody note starts (as an answer between phrases) and throughout sections whose melody is empty. beat < riff bars*4, pitches within MIDI 48..72, about 2 to 8 notes per bar. It may land on any chord of the section, so prefer notes common to those chords (roots, fifths, shared scale tones). Use an empty notes list when a section should have no riff.
+        - melody phrasing: end phrases with rests of at least one full bar (no new note in that bar) so the riff can answer the melody.
+        """
         let complexityText = [
             "", "triads only", "triads and seventh chords", "seventh, ninth, sus and add chords",
             "also 11th, 13th, 6/9 and maj7#11 colour chords",
@@ -80,6 +91,8 @@ enum Generator {
         \(progression.map { "- harmonic backbone: use this progression for the main section: \($0). Other sections may vary or reharmonize it." } ?? "")
         \(r.mood.isEmpty ? "" : "- mood: \(r.mood)")
         \(r.melodyStyle == .free ? "" : "- melody style (\(r.melodyStyle.rawValue)): \(r.melodyStyle.promptHint)")
+        \(drums ? "- drums: the host plays a \(r.drumPattern.promptHint). Write a melody that sits in this groove." : "")
+        \(riff ? "- interlude: include one dramatic instrumental section (for example Interlude or Break) with an empty melody, where the riff carries the music over contrasting, more intense chords." : "")
 
         JSON schema:
         {
@@ -89,7 +102,7 @@ enum Generator {
             "<name>": {
               "bars": integer 4..\(lay.maxBars),
               "chords": [{"root": "C", "quality": one of [\(qualities)], "beats": 4}],
-              "melody": [[beat, midi_pitch, length_in_beats], ...]
+              "melody": [[beat, midi_pitch, length_in_beats], ...]\(riff ? ",\n      \"riff\": {\"bars\": 1 or 2, \"notes\": [[beat, midi_pitch, length_in_beats], ...]}" : "")\(drums ? ",\n      \"drums\": {\"energy\": \"none\" | \"light\" | \"full\", \"fill\": true or false}" : "")
             }
           }
         }
@@ -97,6 +110,8 @@ enum Generator {
         - Define \(lay.sections) sections (for example Intro, A, B, Outro) with contrasting character.
         - chords: cover the whole section; the list loops if shorter. Chord roots should be diatonic to the scale unless a borrowed chord is musically intended.
         - melody: beat is the offset from the section start (0 <= beat < bars*4), pitches within MIDI 60..88 and mostly from the scale notes, with rests, repeated motifs and phrase shape. Density: \(r.melodyStyle.notesPerBar). Notes must not overlap.
+        \(riff ? riffRules : "")
+        \(drums ? drumRules : "")
         - No other fields.
         """
     }
@@ -125,7 +140,18 @@ enum Generator {
             for n in (s["melody"] as? [[NSNumber]]) ?? [] where n.count >= 3 {
                 melody.append(MelodyNote(beat: n[0].doubleValue, pitch: n[1].intValue, length: n[2].doubleValue))
             }
-            sections[name] = SectionSpec(name: name, bars: bars, chords: chords, melody: melody)
+            var spec = SectionSpec(name: name, bars: bars, chords: chords, melody: melody)
+            if let riff = s["riff"] as? [String: Any] {
+                spec.riffBars = max(1, min(4, (riff["bars"] as? NSNumber)?.intValue ?? 1))
+                for n in (riff["notes"] as? [[NSNumber]]) ?? [] where n.count >= 3 {
+                    spec.riff.append(MelodyNote(beat: n[0].doubleValue, pitch: n[1].intValue, length: n[2].doubleValue))
+                }
+            }
+            if let d = s["drums"] as? [String: Any] {
+                spec.drums.energy = (d["energy"] as? String).flatMap { DrumPlan.Energy(rawValue: $0.lowercased()) } ?? .full
+                spec.drums.fill = (d["fill"] as? Bool) ?? false
+            }
+            sections[name] = spec
         }
         guard !sections.isEmpty else { throw OpenRouterError.badJSON("유효한 section 없음") }
         let form = (obj["form"] as? [String]) ?? []

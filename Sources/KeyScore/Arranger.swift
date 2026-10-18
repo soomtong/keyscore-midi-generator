@@ -11,6 +11,10 @@ struct SectionSpec {
     var bars: Int
     var chords: [ChordSpec]
     var melody: [MelodyNote]
+    /// 두 번째 파트용 리프. riffBars 마디 길이로 섹션 끝까지 반복한다. 비어 있으면 이 섹션은 쉼.
+    var riff: [MelodyNote] = []
+    var riffBars = 1
+    var drums = DrumPlan()
 }
 
 struct Arrangement {
@@ -23,6 +27,7 @@ struct ChannelMap {
     var melody = 1
     var chords = 2
     var bass = 3
+    var second = 4  // 두 번째 파트 (리프)
     var rhythm = 10  // 드럼. 16채널 악기는 보통 10번, 8채널 악기는 8번
 }
 
@@ -32,6 +37,7 @@ struct ArrangeOptions {
     var channels = ChannelMap()
     var chordPattern: ChordPattern = .block
     var drumPattern: DrumPattern = .off
+    var secondPart: SecondPart = .off
     var beatsPerBar = 4
 }
 
@@ -68,6 +74,7 @@ enum Arranger {
         var events: [NoteEvent] = []
         var cursor = 0.0
         var seen: [String: Int] = [:]
+        var previous = DrumPlan(energy: .light)  // 곡 첫 섹션은 full 일 때만 크래시
 
         for name in order {
             guard let sec = arr.sections[name] else { continue }
@@ -98,8 +105,14 @@ enum Arranger {
                 }
             }
 
-            // 리듬: 섹션이 바뀔 때 크래시
-            events += o.drumPattern.notes(start: cursor, beats: secBeats, channel: UInt8(ch.rhythm - 1), crashOnStart: true)
+            // 리듬: 앞 섹션보다 세지거나 앞 섹션이 필인으로 끝났을 때만 크래시
+            let plan = sec.drums
+            events += o.drumPattern.notes(start: cursor, beats: secBeats, channel: UInt8(ch.rhythm - 1),
+                                          crashOnStart: previous.energy < plan.energy || previous.fill,
+                                          energy: plan.energy, fill: plan.fill)
+            previous = plan
+
+            events += o.secondPart.notes(section: sec, start: cursor, beats: secBeats, channel: UInt8(ch.second - 1))
 
             // 멜로디: 반복될수록 약간 세게
             for n in sec.melody where n.beat >= 0 && n.beat < secBeats {
