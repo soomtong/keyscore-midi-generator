@@ -2,6 +2,48 @@ import XCTest
 @testable import KeyScore
 
 final class KeyScoreTests: XCTestCase {
+    static let sample = Arrangement(
+        title: "T",
+        sections: ["A": SectionSpec(name: "A", bars: 4, chords: [ChordSpec(root: 0, quality: Theory.chordQualities[0], beats: 4)],
+                                    melody: [], role: .verse)],
+        form: ["A"])
+
+    func testStagesBuildHarmonyThenFoundationThenMelody() {
+        var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
+        XCTAssertEqual(Generator.stages(r), [.harmony, .bass, .melody])
+        r.drumPattern = .funk  // 그루브 주도: 리듬 먼저, 베이스를 킥에 맞춘다
+        XCTAssertEqual(Generator.stages(r), [.harmony, .rhythm, .bass, .melody])
+        r.drumPattern = .ballad  // 베이스 먼저, 드럼 편성을 베이스에 맞춘다
+        XCTAssertEqual(Generator.stages(r), [.harmony, .bass, .rhythm, .melody])
+    }
+
+    func testMergeAddsLayersAndSheetShowsThem() throws {
+        var arr = try Generator.parse("""
+        {"title":"T","form":{"intro":[],"loop":["A"],"outro":[]},"sections":{
+          "A":{"role":"verse","bars":2,"chords":[{"root":"D","quality":"m7","beats":4},{"root":"G","quality":"7","beats":4}]}}}
+        """)
+        XCTAssertTrue(arr.sections["A"]!.melody.isEmpty)
+        try Generator.merge(#"{"sections":{"A":{"bass":[[0,38,2],[4,43,4]]},"Ghost":{"bass":[[0,40,1]]}}}"#, into: &arr)
+        try Generator.merge(#"{"sections":{"A":{"drums":{"energy":"light","fill":true}}}}"#, into: &arr)
+        XCTAssertThrowsError(try Generator.merge(#"{"sections":{"Ghost":{"melody":[]}}}"#, into: &arr))
+        let a = try XCTUnwrap(arr.sections["A"])
+        XCTAssertEqual(a.bass.map(\.pitch), [38, 43])
+        XCTAssertEqual(a.drums, DrumPlan(energy: .light, fill: true))
+        XCTAssertEqual(a.chords.count, 2)  // 앞 단계 결과는 그대로
+        XCTAssertNil(arr.sections["Ghost"])
+
+        let sheet = Generator.sheet(arr, bass: true, drums: true)
+        XCTAssertTrue(sheet.contains("chords: 0 Dmin7 [D F A C], 4 G7 [G B D F]"))
+        XCTAssertTrue(sheet.contains("bass: [[0,38,2],[4,43,4]]"))
+        XCTAssertTrue(sheet.contains("drums: light, fill into next section"))
+        XCTAssertFalse(sheet.contains("Chord tones as MIDI"))
+        XCTAssertTrue(Generator.sheet(arr, bass: true, drums: true, tones: 60...72).contains("- Dmin7: root 62; all tones 60 62 65 69 72"))
+
+        // 베이스 라인이 있으면 근음 대신 그대로 연주한다
+        let bass = Arranger.build(arr, options: ArrangeOptions(bpm: 120, minutes: 4.0 / 60)).events.filter { $0.channel == 2 }
+        XCTAssertEqual(bass.map(\.pitch), [38, 43])
+    }
+
     func testPitchClass() {
         XCTAssertEqual(pitchClass(of: "C#"), 1)
         XCTAssertEqual(pitchClass(of: "Bb"), 10)
@@ -135,13 +177,13 @@ final class KeyScoreTests: XCTestCase {
 
     func testPromptDescribesFormPreset() {
         var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
-        let free = Generator.prompt(r)
+        let free = Generator.harmonyPrompt(r)
         XCTAssertTrue(free.contains("\"loop\": [section names"))
         XCTAssertTrue(free.contains("plays the intro sections once"))
         XCTAssertFalse(free.contains("- form:"))
         r.formPreset = .kpop
         r.secondPart = .riff
-        let kpop = Generator.prompt(r)
+        let kpop = Generator.harmonyPrompt(r)
         XCTAssertTrue(kpop.contains("- form: use this K-pop style form exactly"))
         XCTAssertTrue(kpop.contains("\"Break\" (break"))
         XCTAssertFalse(kpop.contains("- interlude:"))  // 간주가 이미 있으므로 따로 요청하지 않는다
@@ -218,8 +260,9 @@ final class KeyScoreTests: XCTestCase {
         }
         XCTAssertEqual(Theory.quality(named: "7alt")?.complexity, 5)
         XCTAssertEqual(Theory.quality(named: "m11")?.symbol, "min11")
-        let prompt = Generator.prompt(GenerateRequest(root: 0, scale: major, bpm: 100, complexity: 5, minutes: 3))
-        XCTAssertTrue(prompt.contains("7alt") && prompt.contains("melodic complexity"))
+        let r = GenerateRequest(root: 0, scale: major, bpm: 100, complexity: 5, minutes: 3)
+        XCTAssertTrue(Generator.harmonyPrompt(r).contains("7alt"))
+        XCTAssertTrue(Generator.melodyPrompt(r, Self.sample).contains("melodic complexity"))
     }
 
     func testPromptReflectsPatternProgressionAndTempo() {
@@ -227,9 +270,9 @@ final class KeyScoreTests: XCTestCase {
         let ii = Theory.progressions[2]
         let r = GenerateRequest(root: 2, scale: dorian, bpm: 70, complexity: 2, minutes: 0.5,
                                 melodyStyle: .sparse, chordPattern: .tremolo, progression: ii)
-        let prompt = Generator.prompt(r)
+        let prompt = Generator.harmonyPrompt(r)
         XCTAssertTrue(prompt.contains("tremolo"))
-        XCTAssertTrue(prompt.contains("only 1 or 2 notes per bar"))
+        XCTAssertTrue(Generator.melodyPrompt(r, Self.sample).contains("only 1 or 2 notes per bar"))
         XCTAssertTrue(prompt.contains("slow:"))
         XCTAssertTrue(prompt.contains("harmonic backbone"))
         XCTAssertTrue(prompt.contains("2 or 3 sections"))
@@ -238,7 +281,7 @@ final class KeyScoreTests: XCTestCase {
         // 진행을 고르지 않으면 해당 줄이 없다
         var none = r
         none.progression = nil
-        XCTAssertFalse(Generator.prompt(none).contains("harmonic backbone"))
+        XCTAssertFalse(Generator.harmonyPrompt(none).contains("harmonic backbone"))
     }
 
     func testDrumPatternsUseRhythmChannelAndGMNotes() {
@@ -304,15 +347,15 @@ final class KeyScoreTests: XCTestCase {
 
     func testPromptAsksRiffAndInterludeOnlyForRiff() {
         var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
-        let off = Generator.prompt(r)
+        let off = Generator.melodyPrompt(r, Self.sample)
         XCTAssertFalse(off.contains("\"riff\""))
         XCTAssertFalse(off.contains("riff:"))
-        XCTAssertFalse(off.contains("interlude:"))
+        XCTAssertFalse(Generator.harmonyPrompt(r).contains("interlude:"))
         r.secondPart = .riff
-        let riff = Generator.prompt(r)
+        let riff = Generator.melodyPrompt(r, Self.sample)
         XCTAssertTrue(riff.contains("\"riff\": {\"bars\""))
         XCTAssertTrue(riff.contains("NOT played under the melody"))
-        XCTAssertTrue(riff.contains("interlude:"))
+        XCTAssertTrue(Generator.harmonyPrompt(r).contains("interlude:"))
     }
 
     func testDrumEnergyLightAndFill() {
@@ -356,14 +399,16 @@ final class KeyScoreTests: XCTestCase {
 
     func testPromptAsksDrumsOnlyWhenRhythmIsOn() {
         var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
-        let off = Generator.prompt(r)
+        XCTAssertFalse(Generator.stages(r).contains(.rhythm))
+        let off = Generator.stages(r).map { Generator.prompt($0, r, Self.sample) }.joined()
         XCTAssertFalse(off.contains("\"drums\""))
         XCTAssertFalse(off.contains("groove"))
         r.drumPattern = .shuffle
-        let on = Generator.prompt(r)
+        let on = Generator.rhythmPrompt(r, Self.sample)
         XCTAssertTrue(on.contains("\"drums\": {\"energy\""))
         XCTAssertTrue(on.contains("triplet shuffle groove"))
-        XCTAssertTrue(on.contains("\"fill\": true plays a drum fill"))
+        XCTAssertTrue(on.contains("fill: true plays a drum fill"))
+        XCTAssertTrue(Generator.bassPrompt(r, Self.sample).contains("kick beats (0, 2)"))
         for p in DrumPattern.allCases {
             XCTAssertEqual(p.promptHint.isEmpty, p == .off, p.rawValue)
         }

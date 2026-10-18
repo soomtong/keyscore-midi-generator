@@ -395,7 +395,9 @@ final class AppModel: ObservableObject {
         let client = OpenRouterClient(apiKey: apiKey, model: model)
         Task {
             do {
-                let arr = try await Generator.generate(req, client: client)
+                let arr = try await Generator.generate(req, client: client) { [weak self] stage, step, total in
+                    self?.status = "OpenRouter(\(client.model)) \(step)/\(total) \(stage.label) 구성 중…"
+                }
                 let s = adopt(arr, prompt: prompt, arrange: arrange)
                 isGenerating = false
                 status = "\"\(arr.title)\" 생성 완료 — \(Int(s.seconds / 60))분 \(Int(s.seconds) % 60)초, 노트 \(s.events.count)개"

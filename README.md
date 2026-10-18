@@ -15,7 +15,9 @@ macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMI
 - 상단 디스플레이 아이콘: MIDI 출력(노트가 나갈 때 깜빡임), 서스테인 페달, 자동 재생, API key 상태. 마우스를 올리면 설명이 나온다.
 
 ## 구조
-- LLM 은 섹션(코드 진행 + 멜로디)과 form 만 JSON 으로 생성, Arranger 가 목표 길이(30초~12분, 30초 단위)에 맞춰 전개.
+- LLM 은 섹션과 form 만 JSON 으로 생성, Arranger 가 목표 길이(30초~12분, 30초 단위)에 맞춰 전개.
+- 생성은 단계별 호출로 쌓는다: 화음(form · 코드) → 베이스 · 리듬 → 멜로디(+리프). 뒤 단계는 앞 단계 결과(코드 타임라인과 구성음, 베이스 라인, 드럼 편성)를 보고 작곡한다.
+  리듬이 켜져 있으면 Four on the Floor · Funk · Bossa · Shuffle 은 리듬을 먼저 정해 베이스를 킥에 맞추고, Rock · Ballad 는 베이스를 먼저 짜서 드럼 편성을 베이스에 맞춘다.
 - 스케일/코드/진행/멜로디 패턴 청취는 LLM 없이 로컬에서 즉시 재생.
 
 ## 단축키
@@ -46,4 +48,4 @@ Legato(⌥G), 코드 위/아래 확장(⌘U/⇧⌘U, ⌘B/⇧⌘B), 옥타브(�
 
 ## 테스트
     swift test
-    KEYSCORE_LIVE=1 swift test --filter OpenRouterLiveTests   # 실제 API 호출
+    KEYSCORE_LIVE=1 swift test --filter OpenRouterLiveTests   # 실제 API 호출 (KEYSCORE_DRUMS="Funk 16th", KEYSCORE_RIFF=1 선택)

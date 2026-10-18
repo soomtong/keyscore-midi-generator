@@ -14,6 +14,8 @@ struct SectionSpec {
     /// 두 번째 파트용 리프. riffBars 마디 길이로 섹션 끝까지 반복한다. 비어 있으면 이 섹션은 쉼.
     var riff: [MelodyNote] = []
     var riffBars = 1
+    /// LLM 이 쓴 베이스 라인. 비어 있으면 코드 근음을 2박씩 친다.
+    var bass: [MelodyNote] = []
     /// 섹션 역할. LLM 이 주지 않으면 이름으로 추정한다 (Generator.parse).
     var role: SectionRole? = nil
     /// LLM 이 정한 드럼 편성. 없으면 역할의 기본값, 역할도 없으면 full.
@@ -95,7 +97,7 @@ enum Arranger {
             let pass = seen[name, default: 0]
             seen[name] = pass + 1
 
-            // 코드 + 베이스: 코드 목록을 섹션 길이만큼 순환
+            // 코드 + 베이스: 코드 목록을 섹션 길이만큼 순환. 베이스 라인이 있으면 근음 대신 그것을 친다
             if !sec.chords.isEmpty {
                 var t = 0.0
                 var i = 0
@@ -106,7 +108,7 @@ enum Arranger {
                         pitches: c.voicing, start: cursor + t, beats: len,
                         channel: UInt8(ch.chords - 1), velocity: 70)
                     var bt = 0.0
-                    while bt < len - 1e-9 {
+                    while sec.bass.isEmpty && bt < len - 1e-9 {
                         let l = min(2, len - bt)
                         events.append(NoteEvent(
                             channel: UInt8(ch.bass - 1), pitch: c.bassNote,
@@ -116,6 +118,15 @@ enum Arranger {
                     t += len
                     i += 1
                 }
+            }
+
+            for n in sec.bass where n.beat >= 0 && n.beat < secBeats {
+                var p = n.pitch
+                while p > 60 { p -= 12 }
+                while p < 24 { p += 12 }
+                events.append(NoteEvent(
+                    channel: UInt8(ch.bass - 1), pitch: p, velocity: n.beat.truncatingRemainder(dividingBy: bpb) == 0 ? 92 : 80,
+                    start: cursor + n.beat, length: max(0.1, min(n.length, secBeats - n.beat) * 0.95)))
             }
 
             // 리듬: 앞 섹션보다 세지거나 앞 섹션이 필인으로 끝났을 때만 크래시
