@@ -1,5 +1,5 @@
 #!/bin/zsh
-# KeyScore.app 번들 생성 (아이콘 포함): Scripts/bundle.sh → build/KeyScore.app
+# KeyScore.app 번들 생성 (아이콘 포함): Scripts/build-app.sh → build/KeyScore.app
 set -euo pipefail
 cd "${0:A:h}/.."
 

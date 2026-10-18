@@ -4,7 +4,8 @@ macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMI
 
 ## 실행
     swift run KeyScore            # 개발용
-    Scripts/bundle.sh             # build/KeyScore.app (아이콘 포함)
+    Scripts/build-app.sh          # build/KeyScore.app (아이콘 포함)
+    Scripts/build-dist.sh [--force]  # dist/KeyScore-<버전>.dmg (배포용, build-app.sh 포함)
 
 Swift 6 언어 모드(swift-tools-version 6.0), macOS 14 이상. 동시성 설계는 docs/decisions 참고.
 
