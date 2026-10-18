@@ -37,7 +37,7 @@ enum Generator {
         - tempo: \(Int(r.bpm)) BPM, 4/4
         - chord complexity \(r.complexity)/\(Theory.maxComplexity): \(complexityText)
         - melodic complexity: \(melodicText)
-        - total length about \(Int(r.minutes)) minutes (the host will repeat the form; do not write the full length)
+        - total length about \(String(format: "%g", r.minutes)) minutes (the host will repeat the form; do not write the full length)
         \(r.mood.isEmpty ? "" : "- mood: \(r.mood)")
         \(r.melodyStyle == .free ? "" : "- melody style (\(r.melodyStyle.rawValue)): \(r.melodyStyle.promptHint)")
 

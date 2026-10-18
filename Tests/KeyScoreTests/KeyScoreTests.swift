@@ -61,6 +61,15 @@ final class KeyScoreTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testLengthSnapsToHalfMinutes() {
+        XCTAssertEqual(AppModel.snapLength(4.3), 4.5)
+        XCTAssertEqual(AppModel.snapLength(0), 0.5)
+        XCTAssertEqual(AppModel.lengthLabel(0.5), "0:30")
+        XCTAssertEqual(AppModel.snapLength(99), 12)
+        XCTAssertEqual(AppModel.lengthLabel(2.5), "2:30")
+    }
+
     func testTargetBarsAndLayoutFollowLength() {
         XCTAssertEqual(Arranger.targetBars(minutes: 5, bpm: 100), 125)
         XCTAssertEqual(Arranger.targetBars(minutes: 1, bpm: 40), 10)

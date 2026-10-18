@@ -209,6 +209,8 @@ struct ContentView: View {
                                 badges: (1...Theory.maxComplexity).map { "\($0)" }, badgeGroup: .setting, selection: $m.complexity)
                         .frame(width: 420)
                     DarkMenu(items: MelodyStyle.allCases.map { ($0, $0.rawValue) }, selection: $m.melodyStyle)
+                    KeyCap("M", .setting)
+                    KeyCap("⇧M", .setting)
                     Button { m.listen(.melody) } label: { Image(systemName: "play.fill") }
                         .controlSize(.small).focusable(false)
                     KeyCap("G", .listen)
@@ -289,7 +291,7 @@ struct ContentView: View {
                 Text("길이").font(.caption2).foregroundStyle(.tertiary)
             }
             HStack(spacing: 0) {
-                LCDField(label: "LENGTH", value: String(format: "%d:00", Int(m.minutes)), width: 80)
+                LCDField(label: "LENGTH", value: AppModel.lengthLabel(m.minutes), width: 80)
                 LCDDivider()
                 LCDField(label: "BARS", value: "\(m.targetBars)", width: 64)
                 LCDDivider()
@@ -302,7 +304,7 @@ struct ContentView: View {
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.6)))
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            LengthRuler(minutes: $m.minutes, stops: AppModel.lengths)
+            LengthRuler(minutes: $m.minutes, landmarks: AppModel.lengthLandmarks)
                 .frame(height: 42)
             ArrangementLane(
                 layout: layout, order: order,
@@ -589,11 +591,11 @@ private struct MiniKeyboard: View {
     }
 }
 
-/// 곡 길이 눈금자: 1분 단위 눈금, 선택 가능한 길이(stops)는 큰 눈금. 클릭/드래그하면 가장 가까운 길이로 스냅.
+/// 곡 길이 눈금자: 1분 단위 눈금, 30초 단위 작은 눈금, 대표 길이(landmarks)는 큰 눈금과 숫자. 클릭/드래그하면 30초 단위로 스냅.
 private struct LengthRuler: View {
     @Binding var minutes: Double
-    let stops: [Double]
-    private let maxMinutes = 12.0
+    let landmarks: [Double]
+    private let maxMinutes = AppModel.lengthRange.upperBound
     private let inset: CGFloat = 14
 
     var body: some View {
@@ -603,7 +605,7 @@ private struct LengthRuler: View {
                 .gesture(DragGesture(minimumDistance: 0).onChanged { v in
                     let w = max(1, g.size.width - inset * 2)
                     let target = Double((v.location.x - inset) / w) * maxMinutes
-                    if let nearest = stops.min(by: { abs($0 - target) < abs($1 - target) }) { minutes = nearest }
+                    minutes = AppModel.snapLength(target)
                 })
         }
     }
@@ -618,14 +620,17 @@ private struct LengthRuler: View {
             ctx.fill(Path(roundedRect: CGRect(x: inset, y: trackY - 2, width: x(minutes) - inset, height: 4), cornerRadius: 2),
                      with: .color(accent))
 
-            for m in 0...Int(maxMinutes) {
-                let isStop = stops.contains(Double(m))
+            let halves = Int(maxMinutes / AppModel.lengthStep)
+            for h in 0...halves {
+                let m = Double(h) * AppModel.lengthStep
+                let isWhole = h % 2 == 0
+                let isLandmark = landmarks.contains(m)
                 var tick = Path()
-                tick.move(to: CGPoint(x: x(Double(m)), y: trackY + 6))
-                tick.addLine(to: CGPoint(x: x(Double(m)), y: trackY + (isStop ? 13 : 9)))
-                ctx.stroke(tick, with: .color(.white.opacity(isStop ? 0.45 : 0.18)), lineWidth: 1)
+                tick.move(to: CGPoint(x: x(m), y: trackY + 6))
+                tick.addLine(to: CGPoint(x: x(m), y: trackY + (isLandmark ? 13 : isWhole ? 9 : 7)))
+                ctx.stroke(tick, with: .color(.white.opacity(isLandmark ? 0.45 : isWhole ? 0.18 : 0.1)), lineWidth: 1)
             }
-            for m in stops {
+            for m in landmarks {
                 let on = m == minutes
                 ctx.draw(
                     Text("\(Int(m))분").font(.system(size: 10, weight: on ? .bold : .regular))

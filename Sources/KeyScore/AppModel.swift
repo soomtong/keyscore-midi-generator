@@ -5,7 +5,20 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
-    static let lengths: [Double] = [1, 3, 5, 8, 12]
+    /// 곡 길이(분): 30초 단위로 자유롭게 조절. 눈금자에는 lengthLandmarks 만 숫자로 표시한다.
+    static let lengthRange: ClosedRange<Double> = 0.5...12
+    static let lengthStep = 0.5
+    static let lengthLandmarks: [Double] = [1, 3, 5, 8, 12]
+
+    static func snapLength(_ m: Double) -> Double {
+        min(lengthRange.upperBound, max(lengthRange.lowerBound, (m / lengthStep).rounded() * lengthStep))
+    }
+
+    /// 1:30 같은 m:ss 표기
+    static func lengthLabel(_ m: Double) -> String {
+        let secs = Int((m * 60).rounded())
+        return String(format: "%d:%02d", secs / 60, secs % 60)
+    }
 
     enum Tab: Hashable { case generate, listen }
     enum PreviewKind { case scale, chord, progression, melody }
@@ -228,9 +241,8 @@ final class AppModel: ObservableObject {
     }
 
     func shiftLength(_ d: Int) {
-        let i = Self.lengths.firstIndex(of: minutes) ?? 1
-        minutes = Self.lengths[min(Self.lengths.count - 1, max(0, i + d))]
-        status = "길이 \(Int(minutes))분"
+        minutes = Self.snapLength(minutes + Double(d) * Self.lengthStep)
+        status = "길이 \(Self.lengthLabel(minutes))"
     }
 
     func cycleChordPattern(_ d: Int = 1) {
