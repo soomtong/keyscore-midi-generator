@@ -110,13 +110,29 @@ final class AppModel: ObservableObject {
             .store(in: &cancellables)
     }
 
-    func randomize() {
+    /// 곡 재료를 무작위로 바꾼다. 청취 옵션(rate/음 길이)은 includeListenOptions 일 때만.
+    /// 채널·옥타브·Together 등 연주 환경 설정은 건드리지 않는다.
+    func randomize(includeListenOptions: Bool = false) {
         root = Int.random(in: 0..<12)
         scaleIndex = Int.random(in: 0..<Theory.scales.count)
         bpm = Double(Int.random(in: 60...150))
         complexity = Int.random(in: 1...Theory.maxComplexity)
-        melodyStyle = MelodyStyle.allCases.randomElement()!
-        status = "Randomize: \(noteNames[root]) \(scale.name), \(Int(bpm)) BPM, 복잡도 \(complexity), \(melodyStyle.rawValue)"
+        // Free (AI) 는 로컬에서 들을 수 없으므로 제외
+        melodyStyle = MelodyStyle.allCases.filter { $0 != .free }.randomElement()!
+        chordPattern = ChordPattern.allCases.randomElement()!
+        progressionIndex = Int.random(in: 0..<Theory.progressions.count)
+        listenOptions.varyMelody = Bool.random()
+        var summary = "\(noteNames[root]) \(scale.name), \(Int(bpm)) BPM, 복잡도 \(complexity), \(melodyStyle.rawValue), \(chordPattern.rawValue)"
+        if includeListenOptions {
+            // 스케일/코드 순차 청취용. 너무 빠르거나 느린 값(rate 2)은 뺀다.
+            let rate = ListenOptions.rates.filter { $0 <= 1 }.randomElement()!
+            listenOptions.rate = rate
+            // Auto 를 절반 확률로 두고, 나머지는 rate 이하의 길이로 제한
+            let lengths = ListenOptions.lengths.filter { $0 > 0 && $0 <= rate }
+            listenOptions.noteLength = Bool.random() ? 0 : lengths.randomElement()!
+            summary += ", rate \(ListenOptions.label(beats: rate)), 음 길이 \(ListenOptions.label(beats: listenOptions.noteLength))"
+        }
+        status = "Randomize: " + summary
     }
 
     func saveKey() { Keychain.save(apiKey) }
@@ -387,6 +403,7 @@ final class AppModel: ObservableObject {
     }
 
     func listen(_ kind: PreviewKind) {
+        if kind == .melody && listenOptions.varyMelody { listenOptions.melodySeed = .random(in: .min ... .max) }
         guard let s = buildPreview(kind) else {
             status = "Free (AI) 는 곡 생성 시에만 적용됩니다. 로컬로 들으려면 다른 멜로디 패턴을 고르세요."
             return

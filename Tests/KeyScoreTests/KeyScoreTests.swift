@@ -51,7 +51,9 @@ final class KeyScoreTests: XCTestCase {
         for style in MelodyStyle.allCases where style != .free {
             let notes = style.phrase()
             XCTAssertFalse(notes.isEmpty, style.rawValue)
-            for n in notes {
+            XCTAssertEqual(style.phrase(seed: 7).count, notes.count, style.rawValue)
+            XCTAssertTrue(style.phrase(seed: 7).elementsEqual(style.phrase(seed: 7), by: { $0 == $1 }), style.rawValue)
+            for n in notes + style.phrase(seed: 1) + style.phrase(seed: 2) {
                 XCTAssertTrue(n.beat >= 0 && n.beat + n.length <= 16.01, "\(style.rawValue) \(n)")
                 let pitch = MelodyStyle.pitch(degree: n.degree, root: 7, scale: Theory.scales[4])
                 XCTAssertTrue((48...96).contains(pitch), "\(style.rawValue) \(pitch)")

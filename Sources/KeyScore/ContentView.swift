@@ -381,6 +381,7 @@ struct ContentView: View {
             }
             HStack(spacing: 6) {
                 OptionChip("Legato", key: "⌥G", isOn: $m.listenOptions.legato).opacity(together ? 0.35 : 1)
+                OptionChip("Vary melody", key: "⌥V", isOn: $m.listenOptions.varyMelody)
                 OptionChip("Pedal", key: "Tab · ⌥P", isOn: $m.pedalLatched)
                 OptionChip("Auto replay", key: "⌥A", isOn: $m.autoReplay)
             }
@@ -413,6 +414,8 @@ struct ContentView: View {
                 }
                 .controlSize(.small)
                 Text("Omnisphere: Settings → MIDI → 입력 소스에서 \"KeyScore\" 를 선택하고, Multi 모드에서 채널별로 패치를 지정하세요.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("KeyScore 버전 \(AppInfo.versionString)")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -22,7 +22,7 @@ macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMI
 |---|---|
 | 재생/정지 | Space |
 | 반복 | ⌥L |
-| 곡 생성 / Randomize | ⌘G / ⌘R |
+| 곡 생성 / Randomize / Randomize + 청취 옵션 | ⌘G / ⌘R / ⇧⌘R |
 | 설정 패널 | ⌘, (또는 상단 ⚙) |
 | 하단 단축키 패널 열기/닫기 | ⌘/ (Help ▸ 단축키 안내, 패널 우측 상단 ✕) |
 | 탭: 곡 생성 / 청취 | ⌘1 / ⌘2 |

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// macOS 메뉴바. 항목마다 단축키를 표시해 메뉴만 봐도 조작법을 알 수 있게 한다.
@@ -31,8 +32,10 @@ struct KeyScoreCommands: Commands {
                 .disabled(m.isGenerating)
             Button("현재 설정으로 다시 전개") { m.rebuildAndPlay() }
                 .disabled(m.arrangement == nil)
-            Button("Randomize (Key · Scale · 템포 · 복잡도 · 멜로디)") { m.randomize() }
+            Button("Randomize (Key · Scale · 템포 · 복잡도 · 멜로디 · 코드 패턴 · 진행)") { m.randomize() }
                 .keyboardShortcut("r", modifiers: .command)
+            Button("Randomize + 청취 옵션 (Rate · 음 길이)") { m.randomize(includeListenOptions: true) }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
         }
 
         CommandMenu("청취") {
@@ -58,6 +61,8 @@ struct KeyScoreCommands: Commands {
                 .keyboardShortcut("d", modifiers: [.command, .option])
             Toggle("레가토", isOn: $m.listenOptions.legato)
                 .keyboardShortcut("g", modifiers: .option)
+            Toggle("멜로디 변주 (들을 때마다 다르게)", isOn: $m.listenOptions.varyMelody)
+                .keyboardShortcut("v", modifiers: .option)
             Divider()
             Button("코드 위 확장 늘리기") { m.shiftExtendUp(1) }.keyboardShortcut("u", modifiers: .command)
             Button("코드 위 확장 줄이기") { m.shiftExtendUp(-1) }.keyboardShortcut("u", modifiers: [.command, .shift])
@@ -110,6 +115,9 @@ struct KeyScoreCommands: Commands {
         CommandGroup(replacing: .help) {
             Toggle("단축키 안내", isOn: Binding(get: { m.showShortcuts }, set: { _ in m.toggleShortcuts() }))
                 .keyboardShortcut("/", modifiers: .command)
+            Divider()
+            Button("KeyScore 정보") { NSApp.orderFrontStandardAboutPanel(nil) }
+            Text("버전 \(AppInfo.versionString)")
         }
     }
 }
@@ -118,5 +126,15 @@ private extension View {
     /// 평문(또는 Shift 만 붙은) 단축키. 텍스트 입력 중에는 비활성화.
     func shortcut(_ key: KeyEquivalent, _ modifiers: EventModifiers = [], typing: Bool) -> some View {
         keyboardShortcut(key, modifiers: modifiers).disabled(typing)
+    }
+}
+
+enum AppInfo {
+    /// 번들(Info.plist)의 버전. `swift run` 처럼 번들이 없으면 "dev".
+    static var versionString: String {
+        let info = Bundle.main.infoDictionary
+        guard let short = info?["CFBundleShortVersionString"] as? String else { return "dev" }
+        let build = info?["CFBundleVersion"] as? String
+        return build.map { "\(short) (\($0))" } ?? short
     }
 }

@@ -13,6 +13,8 @@ struct ListenOptions: Equatable {
     var extendUp = 0
     var extendDown = 0
     var octave = 0
+    var varyMelody = false  // 멜로디 패턴에 변주를 준다
+    var melodySeed: UInt64 = 0  // 변주 시드. 멜로디를 새로 들을 때마다 다시 뽑는다
 
     static let rates: [Double] = [0.25, 0.5, 1, 2]
     static let lengths: [Double] = [0, 0.25, 0.5, 1, 2, 4, 8]
@@ -98,11 +100,11 @@ enum Preview {
 
     static func melody(root: Int, scale: ScaleType, style: MelodyStyle, channel: Int,
                        options o: ListenOptions = ListenOptions(), bpm: Double = 100) -> Song {
-        let events = style.phrase().map {
+        let events = style.phrase(seed: o.varyMelody ? o.melodySeed : nil).map {
             NoteEvent(channel: UInt8(channel - 1), pitch: MelodyStyle.pitch(degree: $0.degree, root: root, scale: scale) + 12 * o.octave,
                       velocity: 90, start: $0.beat, length: $0.length)
         }.filter { (0...127).contains($0.pitch) }
-        return Song(title: "\(noteNames[root]) \(scale.name) · \(style.rawValue)", bpm: bpm, events: events, totalBeats: 16)
+        return Song(title: "\(noteNames[root]) \(scale.name) · \(style.rawValue)\(o.varyMelody ? " (변주)" : "")", bpm: bpm, events: events, totalBeats: 16)
     }
 
     /// 코드 듣기: 코드 종류와 구성음만 들려준다 (코드 패턴과 무관).
