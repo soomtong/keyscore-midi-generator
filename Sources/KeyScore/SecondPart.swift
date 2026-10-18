@@ -30,15 +30,21 @@ enum SecondPart: String, CaseIterable, Identifiable {
     /// 프레이즈 사이의 대답으로 놓고, 멜로디가 없는 섹션(간주)에서는 처음부터 끝까지 조금 더 세게 이끈다.
     /// 2마디 리프는 두 마디가 모두 비어야 통째로 놓고, 한 마디만 비면 앞 마디만 놓는다.
     /// 앞 프레이즈에서 이어지는 멜로디 음과 같은 음이거나 반음으로 부딪히면 한 옥타브 내려 보고, 그래도 부딪히면 뺀다.
+    ///
+    /// 멜로디는 마디별 시작 여부와 음높이별 울림 구간으로 먼저 정리한다. 리프 음마다 멜로디 전체를 훑으면
+    /// LLM 이 상한(음 2048개)까지 채운 섹션에서 수 초씩 걸리는데, 이렇게 하면 음 하나에 이분 탐색 세 번이다.
     static func riffNotes(_ sec: SectionSpec, start: Double, beats: Double, channel: UInt8) -> [NoteEvent] {
         guard !sec.riff.isEmpty, beats > 0 else { return [] }
         let riffBars = max(1, sec.riffBars)
         let bars = Int((beats / 4).rounded(.up))
         let melody = sec.melody.filter { $0.beat >= 0 && $0.beat < beats }
         let velocity = melody.isEmpty ? 84 : 74
-        func rests(_ bar: Int) -> Bool { bar < bars && !melody.contains { Int($0.beat / 4) == bar } }
+        var starts = [Bool](repeating: false, count: bars)
+        for m in melody { starts[min(bars - 1, Int(m.beat / 4))] = true }
+        let sounding = SoundingMap(melody)
+        func rests(_ bar: Int) -> Bool { bar < bars && !starts[bar] }
         func clashes(_ p: Int, _ s: Double, _ l: Double) -> Bool {
-            melody.contains { m in m.beat < s + l && s < m.beat + m.length && abs(m.pitch - p) <= 1 }
+            (p - 1...p + 1).contains { sounding.overlaps(pitch: $0, from: s, to: s + l) }
         }
         var out: [NoteEvent] = []
         var bar = 0
@@ -60,5 +66,38 @@ enum SecondPart: String, CaseIterable, Identifiable {
             bar += span
         }
         return out
+    }
+}
+
+/// 음높이별로 음이 울리는 구간 [start, end) 을 겹치는 것끼리 합쳐 정렬해 둔 표.
+/// 어떤 구간과 겹치는 음이 있는지를 이분 탐색으로 답한다.
+struct SoundingMap {
+    private var spans: [Int: [(start: Double, end: Double)]] = [:]
+
+    init(_ notes: [MelodyNote]) {
+        for (pitch, group) in Dictionary(grouping: notes, by: \.pitch) {
+            var merged: [(start: Double, end: Double)] = []
+            for n in group.sorted(by: { $0.beat < $1.beat }) {
+                let end = n.beat + max(0, n.length)
+                if let last = merged.last, n.beat <= last.end {
+                    merged[merged.count - 1].end = max(last.end, end)
+                } else {
+                    merged.append((n.beat, end))
+                }
+            }
+            spans[pitch] = merged
+        }
+    }
+
+    /// pitch 의 음이 [from, to) 와 겹쳐 울리는가 (끝점이 맞닿기만 하면 겹치지 않는다).
+    func overlaps(pitch: Int, from: Double, to: Double) -> Bool {
+        guard let list = spans[pitch] else { return false }
+        // end > from 인 첫 구간을 찾는다 (구간은 서로 겹치지 않고 정렬되어 있다)
+        var lo = 0, hi = list.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if list[mid].end <= from { lo = mid + 1 } else { hi = mid }
+        }
+        return lo < list.count && list[lo].start < to
     }
 }

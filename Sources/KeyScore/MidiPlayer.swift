@@ -20,8 +20,8 @@ final class MidiPlayer: @unchecked Sendable {
     private static let activityInterval = 0.06
     private static let log = Logger(subsystem: "dev.soomtong.keyscore", category: "midi")
 
-    private var client = MIDIClientRef()
-    private var source = MIDIEndpointRef()
+    private let client: MIDIClientRef
+    private let source: MIDIEndpointRef
     private let queue = DispatchQueue(label: "keyscore.midi", qos: .userInteractive)
     private var timer: DispatchSourceTimer?
 
@@ -38,6 +38,16 @@ final class MidiPlayer: @unchecked Sendable {
     /// 재생 회차. stop 알림이 어느 재생에 대한 것인지 구분한다 (정지 직후 새 재생을 시작했을 때 늦게 도착한 알림 무시용).
     private var session = 0
 
+    /// 송신 버퍼. 같은 순간에 나가는 메시지(화음 구성음, 베이스, 드럼)를 하나의 MIDIEventList 로 모아
+    /// MIDIServer 왕복을 메시지 수가 아니라 tick 수만큼만 한다. 큐에서만 만진다.
+    /// 힙에 두는 이유: 패킷 포인터가 리스트 안을 가리키므로 구조체가 복사되거나 옮겨지면 안 된다.
+    private let outbox = UnsafeMutablePointer<MIDIEventList>.allocate(capacity: 1)
+    private static let outboxSize = MemoryLayout<MIDIEventList>.size
+    /// MIDIEventPacket 하나에 들어가는 최대 워드 수 (MIDI 1.0 메시지 하나 = 1 워드)
+    private static let packetWords = 64
+    private var outPacket: UnsafeMutablePointer<MIDIEventPacket>?
+    private var outWords = 0
+
     /// 아래 콜백은 모두 `queue` 에서 불린다. 재생을 시작하기 전에 한 번만 설정한다.
     var onProgress: (@Sendable (Double) -> Void)?
     /// 인자는 끝난 재생의 session (play 가 돌려준 값)
@@ -46,24 +56,26 @@ final class MidiPlayer: @unchecked Sendable {
     var onActivity: (@Sendable () -> Void)?
 
     /// 가상 소스를 만들지 못하면 false. 이때 송신은 조용히 무시된다.
-    private(set) var isReady = false
+    let isReady: Bool
 
     init() {
+        var client = MIDIClientRef()
+        var source = MIDIEndpointRef()
         var status = MIDIClientCreateWithBlock("KeyScore" as CFString, &client, nil)
-        guard status == noErr else {
+        if status == noErr {
+            status = MIDISourceCreateWithProtocol(client, "KeyScore" as CFString, ._1_0, &source)
+            if status != noErr { Self.log.error("MIDISourceCreate failed: \(status)") }
+        } else {
             Self.log.error("MIDIClientCreate failed: \(status)")
-            return
         }
-        status = MIDISourceCreateWithProtocol(client, "KeyScore" as CFString, ._1_0, &source)
-        guard status == noErr else {
-            Self.log.error("MIDISourceCreate failed: \(status)")
-            return
-        }
-        isReady = true
+        self.client = client
+        self.source = source
+        isReady = status == noErr
     }
 
     deinit {
         timer?.cancel()
+        outbox.deallocate()
         if source != 0 { MIDIEndpointDispose(source) }
         if client != 0 { MIDIClientDispose(client) }
     }
@@ -83,7 +95,10 @@ final class MidiPlayer: @unchecked Sendable {
             index = 0
             lastProgress = 0
             lastActivity = -1
-            if pedal { for ch in chans { sendRaw(0xB0 | ch, 64, 127) } }  // 페달을 밟은 채로 시작
+            if pedal {  // 페달을 밟은 채로 시작
+                for ch in chans { enqueue(0xB0 | ch, 64, 127) }
+                flush()
+            }
             startNanos = DispatchTime.now().uptimeNanoseconds
             let t = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
             t.setEventHandler { [weak self] in self?.tick() }
@@ -98,7 +113,8 @@ final class MidiPlayer: @unchecked Sendable {
     func setPedal(_ down: Bool) {
         queue.async { [self] in
             pedal = down
-            for ch in usedChannels { sendRaw(0xB0 | ch, 64, down ? 127 : 0) }
+            for ch in usedChannels { enqueue(0xB0 | ch, 64, down ? 127 : 0) }
+            flush()
         }
     }
 
@@ -119,18 +135,20 @@ final class MidiPlayer: @unchecked Sendable {
     }
 
     /// Song 을 시각순 메시지 목록으로. 같은 시각이면 Note Off 가 먼저 나가야 같은 음을 다시 칠 수 있다.
+    /// MIDI 범위 밖의 음높이는 보내지 않고, 세기는 1...127 로 잘라 Note On 이 Note Off(세기 0)로 해석되지 않게 한다.
     private static func schedule(_ song: Song) -> ([Message], Set<UInt8>) {
         let spb = 60 / song.bpm
         var msgs: [Message] = []
         msgs.reserveCapacity(song.events.count * 2)
         var chans = Set<UInt8>()
-        for e in song.events {
+        for e in song.events where (0...127).contains(e.pitch) {
             let ch = e.channel & 0x0F
             chans.insert(ch)
             let on = e.start * spb
             let off = max(on + 0.01, (e.start + e.length) * spb - 0.005)
-            msgs.append(Message(time: on, status: 0x90 | ch, d1: UInt8(clamping: e.pitch), d2: UInt8(clamping: e.velocity)))
-            msgs.append(Message(time: off, status: 0x80 | ch, d1: UInt8(clamping: e.pitch), d2: 0))
+            let pitch = UInt8(e.pitch)
+            msgs.append(Message(time: on, status: 0x90 | ch, d1: pitch, d2: UInt8(clamping: max(1, e.velocity))))
+            msgs.append(Message(time: off, status: 0x80 | ch, d1: pitch, d2: 0))
         }
         msgs.sort { $0.time != $1.time ? $0.time < $1.time : ($0.status & 0xF0) < ($1.status & 0xF0) }
         return (msgs, chans)
@@ -155,6 +173,7 @@ final class MidiPlayer: @unchecked Sendable {
             sentNote = send(messages[index]) || sentNote
             index += 1
         }
+        flush()
         if sentNote, now - lastActivity >= Self.activityInterval {
             lastActivity = now
             onActivity?()
@@ -164,7 +183,8 @@ final class MidiPlayer: @unchecked Sendable {
             onProgress?(min(now, endSeconds))
         }
         if index >= messages.count && now >= endSeconds {
-            guard loop else { return stopLocked(notify: true) }
+            // 길이가 0 인 곡을 반복하면 타이머가 쉬지 않고 돌므로 그냥 끝낸다
+            guard loop, endSeconds > 0 else { return stopLocked(notify: true) }
             startNanos &+= UInt64(endSeconds * 1e9)
             index = 0
             now -= endSeconds
@@ -178,31 +198,42 @@ final class MidiPlayer: @unchecked Sendable {
         guard let t = timer else { return }
         t.cancel()
         timer = nil
-        for ch in usedChannels { sendRaw(0xB0 | ch, 64, 0) }  // 페달을 먼저 떼야 울리던 음이 끊긴다
+        for ch in usedChannels { enqueue(0xB0 | ch, 64, 0) }  // 페달을 먼저 떼야 울리던 음이 끊긴다
         for key in active {
-            sendRaw(0x80 | UInt8(key >> 8), UInt8(key & 0xFF), 0)
+            enqueue(0x80 | UInt8(key >> 8), UInt8(key & 0xFF), 0)
         }
         active.removeAll()
-        for ch in usedChannels { sendRaw(0xB0 | ch, 123, 0) }  // All Notes Off
+        for ch in usedChannels { enqueue(0xB0 | ch, 123, 0) }  // All Notes Off
+        flush()
         if notify { onStop?(session) }
     }
 
-    /// Note On 이면 true
+    /// Note On 이면 true. 실제 송신은 flush 에서.
     private func send(_ m: Message) -> Bool {
         let key = UInt16(m.status & 0x0F) << 8 | UInt16(m.d1)
         let isOn = m.status & 0xF0 == 0x90
         if isOn { active.insert(key) } else { active.remove(key) }
-        sendRaw(m.status, m.d1, m.d2)
+        enqueue(m.status, m.d1, m.d2)
         return isOn
     }
 
-    private func sendRaw(_ status: UInt8, _ d1: UInt8, _ d2: UInt8) {
+    /// 송신 버퍼에 메시지 하나를 더한다. 패킷(64 워드)이 차면 먼저 보내고 새 패킷을 시작하므로 순서는 유지된다.
+    /// MIDIEventListAdd 는 자리가 없으면 NULL 을 주지만 Swift 에는 non-optional 로 들어오므로 워드 수를 직접 센다.
+    private func enqueue(_ status: UInt8, _ d1: UInt8, _ d2: UInt8) {
         guard isReady else { return }
-        // UMP MIDI 1.0 Channel Voice: type 2, group 0
-        var word = UInt32(0x2) << 28 | UInt32(status) << 16 | UInt32(d1) << 8 | UInt32(d2)
-        var list = MIDIEventList()
-        let packet = MIDIEventListInit(&list, ._1_0)
-        _ = MIDIEventListAdd(&list, MemoryLayout<MIDIEventList>.size, packet, 0, 1, &word)
-        MIDIReceivedEventList(source, &list)
+        if outWords >= Self.packetWords { flush() }
+        let packet = outPacket ?? MIDIEventListInit(outbox, ._1_0)
+        // UMP MIDI 1.0 Channel Voice: type 2, group 0. 데이터 바이트는 7비트.
+        var word = UInt32(0x2) << 28 | UInt32(status) << 16 | UInt32(d1 & 0x7F) << 8 | UInt32(d2 & 0x7F)
+        outPacket = MIDIEventListAdd(outbox, Self.outboxSize, packet, 0, 1, &word)
+        outWords += 1
+    }
+
+    /// 버퍼에 쌓인 메시지를 한 번에 보낸다. 비어 있으면 아무것도 하지 않는다.
+    private func flush() {
+        guard outWords > 0 else { return }
+        MIDIReceivedEventList(source, outbox)
+        outPacket = nil
+        outWords = 0
     }
 }

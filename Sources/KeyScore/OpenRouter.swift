@@ -22,9 +22,21 @@ enum OpenRouterError: LocalizedError {
 struct OpenRouterClient: Sendable {
     var apiKey: String
     var model: String
-    var session: URLSession = .shared
+    var session: URLSession = OpenRouterClient.ephemeral
 
     private static let endpoint = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+
+    /// 디스크 캐시·쿠키·자격 증명을 남기지 않는 세션. URLCache 는 응답과 함께 요청 헤더(Authorization 포함)를
+    /// ~/Library/Caches 에 적을 수 있으므로 API 키가 들어가는 호출은 메모리에만 둔다.
+    private static let ephemeral: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.timeoutIntervalForRequest = 240
+        return URLSession(configuration: config)
+    }()
 
     private struct Request: Encodable {
         struct Message: Encodable {
@@ -67,6 +79,7 @@ struct OpenRouterClient: Sendable {
         var req = URLRequest(url: Self.endpoint)
         req.httpMethod = "POST"
         req.timeoutInterval = 240
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("KeyScore MIDI Generator", forHTTPHeaderField: "X-Title")

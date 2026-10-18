@@ -24,7 +24,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             transportBar
-            progressLine
+            ProgressLine(m: m)
             ScrollView {
                 VStack(spacing: 10) {
                     if m.showSettings { settingsCard.transition(.opacity.combined(with: .move(edge: .top))) }
@@ -81,7 +81,7 @@ struct ContentView: View {
 
     private var lcd: some View {
         HStack(spacing: 0) {
-            LCDField(label: "TIME", value: m.duration > 0 ? "\(fmt(m.position)) / \(fmt(m.duration))" : "–:–", width: 104)
+            TimeField(m: m)
             LCDDivider()
             LCDField(label: "TEMPO", value: "\(Int(m.bpm))", width: 52)
             LCDDivider()
@@ -89,48 +89,12 @@ struct ContentView: View {
             LCDDivider()
             LCDField(label: "NOW PLAYING", value: m.nowPlaying.isEmpty ? "–" : m.nowPlaying, width: nil)
             LCDDivider()
-            statusIcons
+            StatusIcons(m: m)
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity)
         .background(Theme.lcd, in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.6)))
-    }
-
-    /// 상시 상태(MIDI 출력, 페달, 자동 재생, 생성/API 키)를 아이콘으로 보여준다. 마우스를 올리면 설명이 나온다.
-    private var statusIcons: some View {
-        let failed = m.status.hasPrefix("실패")
-        return HStack(spacing: 10) {
-            StatusIcon(symbol: "cable.connector", lit: true, flash: m.midiActive, tint: Theme.play,
-                       help: "MIDI 출력 준비됨 — 가상 소스 \"KeyScore\" (노트가 나갈 때 깜빡임)")
-            StatusIcon(symbol: "arrow.down.to.line", lit: m.pedalActive, tint: .orange,
-                       help: m.pedalActive ? "서스테인 페달 ON" : "서스테인 페달 OFF — Tab 을 누르는 동안, 또는 ⌥P 로 고정")
-            StatusIcon(symbol: "arrow.triangle.2.circlepath", lit: m.autoReplay, tint: Theme.lcdText,
-                       help: m.autoReplay ? "자동 재생 ON (⌥A) — 청취 중 값을 바꾸면 다시 재생" : "자동 재생 OFF (⌥A)")
-            if m.isGenerating {
-                ProgressView().controlSize(.mini).frame(width: 16, height: 16).help("OpenRouter 에서 생성 중…")
-            } else if failed {
-                StatusIcon(symbol: "xmark.octagon.fill", lit: true, flash: false, tint: .red, help: m.status)
-            } else if !m.hasAPIKey {
-                StatusIcon(symbol: "key.slash", lit: true, flash: false, tint: .orange,
-                           help: "OpenRouter API key 가 없습니다 — 설정(⌘,)에서 입력하세요")
-            } else {
-                StatusIcon(symbol: "key.fill", lit: true, flash: false, tint: Theme.lcdText.opacity(0.7),
-                           help: "OpenRouter API key 설정됨 — 모델: \(m.model)")
-            }
-        }
-        .padding(.horizontal, 10)
-    }
-
-    private var progressLine: some View {
-        GeometryReader { g in
-            ZStack(alignment: .leading) {
-                Rectangle().fill(Color.black.opacity(0.4))
-                Rectangle().fill(accent)
-                    .frame(width: g.size.width * (m.duration > 0 ? min(m.position / m.duration, 1) : 0))
-            }
-        }
-        .frame(height: 2)
     }
 
     private var footer: some View {
@@ -400,9 +364,7 @@ struct ContentView: View {
 
             LengthRuler(minutes: $m.minutes, landmarks: AppModel.lengthLandmarks)
                 .frame(height: 42)
-            ArrangementLane(
-                layout: layout, order: order,
-                progress: m.isPlaying && m.playingArrangement && m.duration > 0 ? min(m.position / m.duration, 1) : nil)
+            ArrangementLane(m: m, layout: layout, order: order)
                 .frame(height: 34)
         }
     }
@@ -523,10 +485,6 @@ struct ContentView: View {
         }
     }
 
-    private func fmt(_ s: Double) -> String {
-        String(format: "%d:%02d", Int(s) / 60, Int(s) % 60)
-    }
-
     // MARK: 단축키
 
     private func releaseFocus() {
@@ -555,6 +513,68 @@ struct ContentView: View {
 }
 
 // MARK: - 컴포넌트
+
+// 재생 중 초당 20회 바뀌는 position 과 Note On 마다 깜빡이는 midiActive 는 아래의 작은 뷰에서만 읽는다.
+// @Observable 은 body 를 평가한 뷰 단위로 의존성을 기록하므로, ContentView.body 안의 computed property 에서
+// 읽으면 1000줄짜리 본문 전체가 초당 20회 다시 평가된다.
+
+/// 상단 디스플레이의 TIME 칸 (재생 위치 / 길이)
+private struct TimeField: View {
+    let m: AppModel
+
+    var body: some View {
+        LCDField(label: "TIME", value: m.duration > 0 ? "\(Self.fmt(m.position)) / \(Self.fmt(m.duration))" : "–:–", width: 104)
+    }
+
+    private static func fmt(_ s: Double) -> String {
+        String(format: "%d:%02d", Int(s) / 60, Int(s) % 60)
+    }
+}
+
+/// 트랜스포트 아래의 2px 진행선
+private struct ProgressLine: View {
+    let m: AppModel
+
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.black.opacity(0.4))
+                Rectangle().fill(accent)
+                    .frame(width: g.size.width * (m.duration > 0 ? min(m.position / m.duration, 1) : 0))
+            }
+        }
+        .frame(height: 2)
+    }
+}
+
+/// 상시 상태(MIDI 출력, 페달, 자동 재생, 생성/API 키)를 아이콘으로 보여준다. 마우스를 올리면 설명이 나온다.
+private struct StatusIcons: View {
+    let m: AppModel
+
+    var body: some View {
+        let failed = m.status.hasPrefix("실패")
+        HStack(spacing: 10) {
+            StatusIcon(symbol: "cable.connector", lit: true, flash: m.midiActive, tint: Theme.play,
+                       help: "MIDI 출력 준비됨 — 가상 소스 \"KeyScore\" (노트가 나갈 때 깜빡임)")
+            StatusIcon(symbol: "arrow.down.to.line", lit: m.pedalActive, tint: .orange,
+                       help: m.pedalActive ? "서스테인 페달 ON" : "서스테인 페달 OFF — Tab 을 누르는 동안, 또는 ⌥P 로 고정")
+            StatusIcon(symbol: "arrow.triangle.2.circlepath", lit: m.autoReplay, tint: Theme.lcdText,
+                       help: m.autoReplay ? "자동 재생 ON (⌥A) — 청취 중 값을 바꾸면 다시 재생" : "자동 재생 OFF (⌥A)")
+            if m.isGenerating {
+                ProgressView().controlSize(.mini).frame(width: 16, height: 16).help("OpenRouter 에서 생성 중…")
+            } else if failed {
+                StatusIcon(symbol: "xmark.octagon.fill", lit: true, flash: false, tint: .red, help: m.status)
+            } else if !m.hasAPIKey {
+                StatusIcon(symbol: "key.slash", lit: true, flash: false, tint: .orange,
+                           help: "OpenRouter API key 가 없습니다 — 설정(⌘,)에서 입력하세요")
+            } else {
+                StatusIcon(symbol: "key.fill", lit: true, flash: false, tint: Theme.lcdText.opacity(0.7),
+                           help: "OpenRouter API key 설정됨 — 모델: \(m.model)")
+            }
+        }
+        .padding(.horizontal, 10)
+    }
+}
 
 private struct Card<Content: View, Trailing: View>: View {
     let title: String?
@@ -749,10 +769,15 @@ private struct LengthRuler: View {
 }
 
 /// 섹션 배치 타임라인. 폭은 마디 수에 비례하고, 재생 중이면 플레이헤드가 움직인다.
+/// position 은 이 뷰의 body 에서 읽어 플레이헤드가 움직여도 이 뷰만 다시 그린다.
 private struct ArrangementLane: View {
+    let m: AppModel
     let layout: [(name: String, bars: Int)]
     let order: [String]
-    let progress: Double?
+
+    private var progress: Double? {
+        m.isPlaying && m.playingArrangement && m.duration > 0 ? min(m.position / m.duration, 1) : nil
+    }
 
     private static let palette: [Color] = [
         Color(red: 0.48, green: 0.32, blue: 0.96), Color(red: 0.18, green: 0.70, blue: 0.72),

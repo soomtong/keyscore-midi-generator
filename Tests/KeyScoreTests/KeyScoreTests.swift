@@ -345,6 +345,37 @@ final class KeyScoreTests: XCTestCase {
         XCTAssertTrue(Arranger.build(arr, options: o).events.contains { $0.channel == 4 })
     }
 
+    /// LLM 이 파트별 상한(2048 음)까지 채운 섹션도 리프 배치가 즉시 끝난다. 예전 구현은 리프 음마다 멜로디 전체를
+    /// 훑어 같은 입력에 섹션 한 번당 2초 넘게 걸렸다 (곡 전체로는 섹션 × 반복 횟수만큼 곱해진다).
+    func testRiffPlacementStaysFastOnMaximalInput() {
+        let melody = (0..<Generator.maxNotesPerPart).map { MelodyNote(beat: Double($0 % 8) * 0.01, pitch: 60 + $0 % 12, length: 64) }
+        let riff = (0..<Generator.maxNotesPerPart).map { MelodyNote(beat: Double($0 % 16) * 0.25, pitch: 60 + $0 % 12, length: 1) }
+        var sec = SectionSpec(name: "A", bars: 32, chords: [ChordSpec(root: 0, quality: Theory.chordQualities[0], beats: 4)], melody: melody)
+        sec.riff = riff
+        sec.riffBars = 4
+        let started = Date()
+        let out = SecondPart.riff.notes(section: sec, start: 0, beats: 128, channel: 3)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.3)
+        XCTAssertFalse(out.isEmpty)
+        // 멜로디(60...71 이 0...64박 울림)가 쉬는 마디에만, 그리고 반음 이내로 부딪히지 않는 음만 남는다
+        XCTAssertTrue(out.allSatisfy { $0.start >= 4 })
+        XCTAssertTrue(out.allSatisfy { $0.start >= 64 || !(59...72).contains($0.pitch) })
+    }
+
+    func testSoundingMapOverlapUsesHalfOpenIntervals() {
+        let map = SoundingMap([
+            MelodyNote(beat: 0, pitch: 60, length: 1), MelodyNote(beat: 1, pitch: 60, length: 1),  // 맞닿은 두 음 → [0, 2)
+            MelodyNote(beat: 5, pitch: 60, length: 0.5), MelodyNote(beat: 3, pitch: 62, length: 2),
+        ])
+        XCTAssertTrue(map.overlaps(pitch: 60, from: 0.5, to: 1.5))
+        XCTAssertTrue(map.overlaps(pitch: 60, from: 1.9, to: 2.5))
+        XCTAssertFalse(map.overlaps(pitch: 60, from: 2, to: 5))  // 끝점만 맞닿음
+        XCTAssertTrue(map.overlaps(pitch: 60, from: 4.9, to: 5.1))
+        XCTAssertFalse(map.overlaps(pitch: 60, from: 5.5, to: 9))
+        XCTAssertTrue(map.overlaps(pitch: 62, from: 4, to: 4.1))
+        XCTAssertFalse(map.overlaps(pitch: 61, from: 0, to: 100))
+    }
+
     func testPromptAsksRiffAndInterludeOnlyForRiff() {
         var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
         let off = Generator.melodyPrompt(r, Self.sample)

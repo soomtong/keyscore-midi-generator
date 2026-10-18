@@ -29,6 +29,8 @@ enum Keychain {
         guard !value.isEmpty else { return deleted == errSecSuccess || deleted == errSecItemNotFound }
         var add = base
         add[kSecValueData as String] = Data(value.utf8)
+        // 잠금 해제 중에만 읽고, 다른 기기(iCloud Keychain·백업 복원)로 옮기지 않는다
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 }
