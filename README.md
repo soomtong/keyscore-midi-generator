@@ -6,6 +6,8 @@ macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMI
     swift run KeyScore            # 개발용
     Scripts/bundle.sh             # build/KeyScore.app (아이콘 포함)
 
+Swift 6 언어 모드(swift-tools-version 6.0), macOS 14 이상. 동시성 설계는 docs/decisions 참고.
+
 - API key: 환경변수 OPENROUTER_API_KEY 또는 설정(⌘,)에서 입력(Keychain 저장).
 - 모델: 설정에서 저가 모델 프리셋(Claude Haiku 5.5, GPT-6 Luna, DeepSeek, GLM, Qwen)을 고르거나 ID 를 직접 입력. 환경변수 OPENROUTER_MODEL 이 있으면 우선.
 - 가상악기/외장악기: MIDI 입력 소스에서 "KeyScore" 선택. 기본 채널은 Melody 1, Chord 2, Bass 3, Second 4, Rhythm 10 (설정에서 1~16 변경, Second·Rhythm 은 곡 생성 탭에서도 변경).
@@ -19,6 +21,9 @@ macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMI
 - 생성은 단계별 호출로 쌓는다: 화음(form · 코드) → 베이스 · 리듬 → 멜로디(+리프). 뒤 단계는 앞 단계 결과(코드 타임라인과 구성음, 베이스 라인, 드럼 편성)를 보고 작곡한다.
   리듬이 켜져 있으면 Four on the Floor · Funk · Bossa · Shuffle 은 리듬을 먼저 정해 베이스를 킥에 맞추고, Rock · Ballad 는 베이스를 먼저 짜서 드럼 편성을 베이스에 맞춘다.
 - 스케일/코드/진행/멜로디 패턴 청취는 LLM 없이 로컬에서 즉시 재생.
+- MIDI 송신(MidiPlayer)은 전용 userInteractive 큐에서 다음 이벤트 시각에 맞춘 one-shot 타이머로 깨어난다 (폴링 없음).
+  LLM 이 준 수치는 파싱 단계에서 유한성 검사와 범위 클램프를 거치고, 섹션 수와 form 길이에도 상한이 있다.
+- API key 는 설정에서 입력한 값만 Keychain 에 저장한다. 환경변수로 받은 키는 저장하지 않는다.
 
 ## 단축키
 메뉴바(재생 / 청취 / 곡 설정)에 모두 표시된다. 평문 키는 텍스트 입력 중에는 동작하지 않는다. 한글 입력기에서도 동작한다.
@@ -27,7 +32,7 @@ macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMI
 |---|---|
 | 재생/정지 | Space |
 | 반복 | ⌥L |
-| 곡 생성 / Randomize / Randomize + 청취 옵션 | ⌘G / ⌘R / ⇧⌘R |
+| 곡 생성 / 생성 취소 / Randomize / Randomize + 청취 옵션 | ⌘G / ⌘. / ⌘R / ⇧⌘R |
 | 설정 패널 | ⌘, (또는 상단 ⚙) |
 | 하단 단축키 패널 열기/닫기 | ⌘/ (Help ▸ 단축키 안내, 패널 우측 상단 ✕) |
 | 탭: 곡 생성 / 청취 | ⌘1 / ⌘2 |

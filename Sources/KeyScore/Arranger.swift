@@ -49,6 +49,9 @@ struct ArrangeOptions {
 }
 
 enum Arranger {
+    /// LLM 이 쓴 베이스 음은 이 음역으로 접는다.
+    static let bassRange = 24...60
+
     /// intro 를 한 번, loop 를 한 바퀴 이상, outro 를 한 번 놓아 목표 마디 수에 가장 가깝게 섹션 목록을 만든다.
     /// 남는 길이는 loop 의 뒷부분(후렴 쪽)으로 채운다. 반복 절의 앞(A)을 줄이는 셈이라 간주 → 후렴 흐름이 유지된다.
     /// 곡이 짧아도 intro · loop 한 바퀴 · outro 는 남긴다.
@@ -87,6 +90,7 @@ enum Arranger {
         let order = expandForm(arr.form, sections: arr.sections, targetBars: targetBars)
         let ch = o.channels
         var events: [NoteEvent] = []
+        events.reserveCapacity(order.count * 64)
         var cursor = 0.0
         var seen: [String: Int] = [:]
         var previous = DrumPlan(energy: .light)  // 곡 첫 섹션은 full 일 때만 크래시
@@ -121,11 +125,9 @@ enum Arranger {
             }
 
             for n in sec.bass where n.beat >= 0 && n.beat < secBeats {
-                var p = n.pitch
-                while p > 60 { p -= 12 }
-                while p < 24 { p += 12 }
                 events.append(NoteEvent(
-                    channel: UInt8(ch.bass - 1), pitch: p, velocity: n.beat.truncatingRemainder(dividingBy: bpb) == 0 ? 92 : 80,
+                    channel: UInt8(ch.bass - 1), pitch: n.pitch.foldedIntoOctaveRange(Self.bassRange),
+                    velocity: n.beat.truncatingRemainder(dividingBy: bpb) == 0 ? 92 : 80,
                     start: cursor + n.beat, length: max(0.1, min(n.length, secBeats - n.beat) * 0.95)))
             }
 

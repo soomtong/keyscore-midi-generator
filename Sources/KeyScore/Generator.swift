@@ -303,9 +303,34 @@ enum Generator {
         return obj
     }
 
+    /// LLM 출력의 상한. 전개 알고리즘이 섹션 수의 제곱에 비례하므로 터무니없는 응답은 잘라 낸다.
+    static let maxSections = 24
+    static let maxFormEntries = 64
+    static let maxNotesPerPart = 2048
+
+    /// [beat, pitch, length] 목록. 수치는 유한해야 하고 음높이는 MIDI 범위로 자른다 (뒤 단계가 LLM 값을 믿지 않아도 되게).
     private static func notes(_ raw: Any?) -> [MelodyNote] {
-        ((raw as? [[NSNumber]]) ?? []).filter { $0.count >= 3 }
-            .map { MelodyNote(beat: $0[0].doubleValue, pitch: $0[1].intValue, length: $0[2].doubleValue) }
+        ((raw as? [[NSNumber]]) ?? []).lazy.filter { $0.count >= 3 }
+            .compactMap { n -> MelodyNote? in
+                let beat = n[0].doubleValue, pitch = n[1].doubleValue, length = n[2].doubleValue
+                guard beat.isFinite, pitch.isFinite, length.isFinite, beat >= 0, length >= 0 else { return nil }
+                return MelodyNote(beat: beat, pitch: Int(max(0, min(127, pitch.rounded()))), length: min(length, 64))
+            }
+            .prefix(maxNotesPerPart).map { $0 }
+    }
+
+    private static func clampedInt(_ raw: Any?, _ range: ClosedRange<Int>, default d: Int) -> Int {
+        guard let v = (raw as? NSNumber)?.doubleValue, v.isFinite else { return d }
+        return Int(max(Double(range.lowerBound), min(Double(range.upperBound), v.rounded())))
+    }
+
+    private static func clampedDouble(_ raw: Any?, _ range: ClosedRange<Double>, default d: Double) -> Double {
+        guard let v = (raw as? NSNumber)?.doubleValue, v.isFinite else { return d }
+        return max(range.lowerBound, min(range.upperBound, v))
+    }
+
+    private static func names(_ raw: Any?) -> [String] {
+        Array(((raw as? [String]) ?? []).prefix(maxFormEntries))
     }
 
     /// 섹션 JSON 에 있는 파트(멜로디, 리프, 베이스, 드럼)만 덮어쓴다. 없는 키는 건드리지 않는다.
@@ -313,7 +338,7 @@ enum Generator {
         if s["melody"] != nil { spec.melody = notes(s["melody"]) }
         if s["bass"] != nil { spec.bass = notes(s["bass"]) }
         if let riff = s["riff"] as? [String: Any] {
-            spec.riffBars = max(1, min(4, (riff["bars"] as? NSNumber)?.intValue ?? 1))
+            spec.riffBars = clampedInt(riff["bars"], 1...4, default: 1)
             spec.riff = notes(riff["notes"])
         }
         if let d = s["drums"] as? [String: Any] {
@@ -329,14 +354,14 @@ enum Generator {
         guard let secs = obj["sections"] as? [String: Any] else { throw OpenRouterError.badJSON("sections 없음") }
 
         var sections: [String: SectionSpec] = [:]
-        for (name, raw) in secs {
+        for (name, raw) in secs.sorted(by: { $0.key < $1.key }).prefix(maxSections) {
             guard let s = raw as? [String: Any] else { continue }
-            let bars = max(1, min(32, (s["bars"] as? NSNumber)?.intValue ?? 8))
+            let bars = clampedInt(s["bars"], 1...32, default: 8)
             var chords: [ChordSpec] = []
-            for c in (s["chords"] as? [[String: Any]]) ?? [] {
+            for c in ((s["chords"] as? [[String: Any]]) ?? []).prefix(bars * 4) {
                 guard let rootName = c["root"] as? String, let pc = pitchClass(of: rootName) else { continue }
                 let q = (c["quality"] as? String).flatMap(Theory.quality(named:)) ?? Theory.chordQualities[0]
-                let beats = max(1, min(16, (c["beats"] as? NSNumber)?.doubleValue ?? 4))
+                let beats = clampedDouble(c["beats"], 1...16, default: 4)
                 chords.append(ChordSpec(root: pc, quality: q, beats: beats))
             }
             var spec = SectionSpec(name: name, bars: bars, chords: chords, melody: [])
@@ -347,11 +372,11 @@ enum Generator {
         guard !sections.isEmpty else { throw OpenRouterError.badJSON("유효한 section 없음") }
         let form: SongForm
         if let f = obj["form"] as? [String: Any] {
-            let parsed = SongForm(intro: f["intro"] as? [String] ?? [], loop: f["loop"] as? [String] ?? [], outro: f["outro"] as? [String] ?? [])
+            let parsed = SongForm(intro: names(f["intro"]), loop: names(f["loop"]), outro: names(f["outro"]))
             // intro/outro 를 비우고 전부 loop 에 넣은 응답도 역할로 다시 나눈다
             form = parsed.intro.isEmpty && parsed.outro.isEmpty ? SongForm.split(parsed.loop, sections: sections) : parsed
         } else {
-            form = SongForm.split(obj["form"] as? [String] ?? [], sections: sections)
+            form = SongForm.split(names(obj["form"]), sections: sections)
         }
         return Arrangement(title: (obj["title"] as? String) ?? "Untitled", sections: sections, form: form)
     }
@@ -369,13 +394,14 @@ enum Generator {
         guard matched > 0 else { throw OpenRouterError.badJSON("알려진 section 없음") }
     }
 
-    /// progress 는 각 단계를 시작할 때 (단계, 몇 번째, 전체 수) 로 불린다.
+    /// progress 는 각 단계를 시작할 때 (단계, 몇 번째, 전체 수) 로 불린다. 호출 Task 가 취소되면 다음 단계로 가지 않는다.
     static func generate(_ r: GenerateRequest, client: OpenRouterClient,
-                         progress: @escaping @MainActor (Stage, Int, Int) -> Void = { _, _, _ in }) async throws -> Arrangement {
+                         progress: @escaping @MainActor @Sendable (Stage, Int, Int) -> Void = { _, _, _ in }) async throws -> Arrangement {
         let all = stages(r)
         await progress(.harmony, 1, all.count)
         var arr = try parse(await client.complete(system: system, user: harmonyPrompt(r)))
         for (i, stage) in all.enumerated().dropFirst() {
+            try Task.checkCancellation()
             await progress(stage, i + 1, all.count)
             try merge(await client.complete(system: system, user: prompt(stage, r, arr)), into: &arr)
         }

@@ -482,6 +482,62 @@ final class KeyScoreTests: XCTestCase {
         XCTAssertNotEqual(a.events, b.events)
     }
 
+    func testPitchFoldingMatchesLoopSemanticsAndSurvivesHugeValues() {
+        func slow(_ p: Int, _ r: ClosedRange<Int>) -> Int {
+            var p = p
+            while p > r.upperBound { p -= 12 }
+            while p < r.lowerBound { p += 12 }
+            return p
+        }
+        for p in -40...140 {
+            XCTAssertEqual(p.foldedIntoOctaveRange(Arranger.bassRange), slow(p, Arranger.bassRange), "\(p)")
+            XCTAssertEqual(p.foldedIntoOctaveRange(SecondPart.riffRange), slow(p, SecondPart.riffRange), "\(p)")
+        }
+        // LLM 이 터무니없는 값을 줘도 즉시 끝나고 범위 안에 든다
+        XCTAssertTrue(Arranger.bassRange.contains(Int.max.foldedIntoOctaveRange(Arranger.bassRange)))
+        XCTAssertTrue(Arranger.bassRange.contains((-Int.max).foldedIntoOctaveRange(Arranger.bassRange)))
+        XCTAssertEqual(200.foldedIntoOctaveRange(60...65), 65)  // 한 옥타브보다 좁은 범위는 끝으로 자른다
+    }
+
+    func testParseClampsUntrustedNumbers() throws {
+        let json = """
+        {"title":"T","form":["A"],"sections":{
+          "A":{"bars":1e12,"chords":[{"root":"C","quality":"maj","beats":1e9}],
+               "melody":[[0,1e18,1],[-1,60,1],[1,60.4,0],[2,-500,1e9],[3,64,-1]],
+               "bass":[[0,99999999999,2]],
+               "riff":{"bars":99,"notes":[[0,60,0.5]]},
+               "drums":{"energy":"full"}}}}
+        """
+        let arr = try Generator.parse(json)
+        let a = try XCTUnwrap(arr.sections["A"])
+        XCTAssertEqual(a.bars, 32)
+        XCTAssertEqual(a.chords.first?.beats, 16)
+        XCTAssertEqual(a.melody.map(\.pitch), [127, 60, 0])  // 음수 beat/길이는 버리고, 음높이는 0...127
+        XCTAssertEqual(a.bass.map(\.pitch), [127])
+        XCTAssertEqual(a.riffBars, 4)
+        var o = ArrangeOptions(bpm: 120, minutes: 0.5)
+        o.secondPart = .riff
+        // 거대한 베이스 음높이도 전개가 즉시 끝난다
+        let song = Arranger.build(arr, options: o)
+        XCTAssertTrue(song.events.allSatisfy { (0...127).contains($0.pitch) })
+    }
+
+    func testParseLimitsSectionAndFormCounts() throws {
+        let names = (0..<40).map { "S\($0)" }
+        let sections = names.map { "\"\($0)\":{\"bars\":4,\"chords\":[{\"root\":\"C\",\"quality\":\"maj\",\"beats\":4}]}" }.joined(separator: ",")
+        let form = (0..<200).map { "\"S\($0 % 40)\"" }.joined(separator: ",")
+        let arr = try Generator.parse("{\"title\":\"T\",\"form\":[\(form)],\"sections\":{\(sections)}}")
+        XCTAssertEqual(arr.sections.count, Generator.maxSections)
+        XCTAssertLessThanOrEqual(arr.form.all.count, Generator.maxFormEntries)
+        _ = Arranger.build(arr, options: ArrangeOptions(bpm: 200, minutes: 12))  // 최대 길이에서도 바로 끝난다
+    }
+
+    func testCycledWrapsBothWays() {
+        XCTAssertEqual(DrumPattern.off.cycled(by: -1), DrumPattern.allCases.last)
+        XCTAssertEqual(DrumPattern.allCases.last!.cycled(by: 1), .off)
+        XCTAssertEqual(ChordPattern.block.cycled(by: ChordPattern.allCases.count * 3 + 1), ChordPattern.allCases[1])
+    }
+
     @MainActor
     func testShortcutPanelToggleIsRemembered() {
         let key = "ui.showShortcuts"

@@ -1,6 +1,6 @@
 import Foundation
 
-struct NoteEvent: Equatable {
+struct NoteEvent: Equatable, Sendable {
     var channel: UInt8  // 0-based
     var pitch: Int
     var velocity: Int
@@ -8,13 +8,25 @@ struct NoteEvent: Equatable {
     var length: Double  // beats
 }
 
-struct Song {
+struct Song: Sendable {
     var title: String
     var bpm: Double
     var events: [NoteEvent]
     var totalBeats: Double
 
     var seconds: Double { totalBeats * 60 / bpm }
+}
+
+extension Int {
+    /// 음높이를 옥타브 단위로 옮겨 range 안에 넣는다. range 가 한 옥타브보다 좁으면 가장 가까운 끝으로 자른다.
+    /// 반복문 대신 나눗셈으로 접으므로 입력이 아무리 커도 한 번에 끝난다.
+    func foldedIntoOctaveRange(_ range: ClosedRange<Int>) -> Int {
+        // 음높이로서 의미 없는 극단값은 먼저 잘라 아래 산술이 넘치지 않게 한다
+        var p = Swift.min(1_000_000, Swift.max(-1_000_000, self))
+        if p > range.upperBound { p -= 12 * ((p - range.upperBound + 11) / 12) }
+        if p < range.lowerBound { p += 12 * ((range.lowerBound - p + 11) / 12) }
+        return Swift.min(range.upperBound, Swift.max(range.lowerBound, p))
+    }
 }
 
 enum ChordPattern: String, CaseIterable, Identifiable {

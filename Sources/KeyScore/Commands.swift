@@ -8,7 +8,7 @@ import SwiftUI
 ///   텍스트 입력 중에는 평문 키 메뉴 항목을 비활성화해 입력을 가로채지 않는다.
 /// - ⌘/⌥ 조합은 메뉴가 직접 처리한다.
 struct KeyScoreCommands: Commands {
-    @ObservedObject var m: AppModel
+    @Bindable var m: AppModel
 
     var body: some Commands {
         // 창을 복제하면 플레이어가 둘이 되므로 New Window 는 제거
@@ -30,6 +30,9 @@ struct KeyScoreCommands: Commands {
             Button("곡 생성 (OpenRouter)") { m.generate() }
                 .keyboardShortcut("g", modifiers: .command)
                 .disabled(m.isGenerating)
+            Button("생성 취소") { m.cancelGenerate() }
+                .keyboardShortcut(".", modifiers: .command)
+                .disabled(!m.isGenerating)
             Button("현재 설정으로 다시 전개") { m.rebuildAndPlay() }
                 .disabled(m.arrangement == nil)
             Button("Randomize (Key · Scale · 템포 · 복잡도 · 멜로디 · 코드 패턴 · 진행)") { m.randomize() }

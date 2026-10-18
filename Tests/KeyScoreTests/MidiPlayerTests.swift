@@ -1,10 +1,16 @@
 import CoreMIDI
 import XCTest
+import os
 @testable import KeyScore
 
-/// "KeyScore" 가상 소스를 구독해 받은 MIDI 메시지를 모은다.
+/// "KeyScore" 가상 소스를 구독해 받은 MIDI 메시지를 모은다. 도착 시각(uptime, 초)도 함께 기록한다.
 private final class Receiver: @unchecked Sendable {
-    struct Message: Equatable { let status: UInt8; let d1: UInt8; let d2: UInt8 }
+    struct Message: Equatable {
+        let status: UInt8
+        let d1: UInt8
+        let d2: UInt8
+        let at: Double
+    }
     private let lock = NSLock()
     private var all: [Message] = []
     private var client = MIDIClientRef()
@@ -18,6 +24,7 @@ private final class Receiver: @unchecked Sendable {
     init?() {
         MIDIClientCreate("test" as CFString, nil, nil, &client)
         MIDIInputPortCreateWithProtocol(client, "in" as CFString, ._1_0, &port) { [unowned self] list, _ in
+            let at = Double(DispatchTime.now().uptimeNanoseconds) / 1e9
             var packet = list.pointee.packet
             for _ in 0..<list.pointee.numPackets {
                 withUnsafeBytes(of: packet.words) { raw in
@@ -25,7 +32,7 @@ private final class Receiver: @unchecked Sendable {
                     for i in 0..<Int(packet.wordCount) {
                         let w = words[i]
                         lock.lock()
-                        all.append(Message(status: UInt8((w >> 16) & 0xFF), d1: UInt8((w >> 8) & 0xFF), d2: UInt8(w & 0xFF)))
+                        all.append(Message(status: UInt8((w >> 16) & 0xFF), d1: UInt8((w >> 8) & 0xFF), d2: UInt8(w & 0xFF), at: at))
                         lock.unlock()
                     }
                 }
@@ -49,6 +56,7 @@ private final class Receiver: @unchecked Sendable {
 final class MidiPlayerTests: XCTestCase {
     func testVirtualSourceDeliversNotes() throws {
         let player = MidiPlayer()
+        XCTAssertTrue(player.isReady)
         let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
         let song = Preview.scale(root: 0, type: Theory.scales[0], channel: 1)
         player.play(song, loop: false)
@@ -82,6 +90,48 @@ final class MidiPlayerTests: XCTestCase {
         // 정지 때에는 페달을 먼저 떼고 All Notes Off(CC123)
         let tail = rx.messages.suffix(8).map { "\($0.status):\($0.d1)" }
         XCTAssertTrue(tail.contains("176:123"), "All Notes Off 가 없음: \(tail)")
+    }
+
+    /// one-shot 타이머가 다음 이벤트 시각에 정확히 깨어나는지: 125 ms 간격 16음의 간격 오차를 본다.
+    func testNoteOnTimingFollowsSchedule() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        let step = 0.25  // 박
+        let bpm = 120.0
+        let events = (0..<16).map { NoteEvent(channel: 0, pitch: 60 + $0 % 12, velocity: 90, start: Double($0) * step, length: 0.1) }
+        let song = Song(title: "timing", bpm: bpm, events: events, totalBeats: 4.5)
+        player.play(song, loop: false)
+        Thread.sleep(forTimeInterval: song.seconds + 0.3)
+        let ons = rx.messages.filter { $0.status & 0xF0 == 0x90 }.map(\.at)
+        XCTAssertEqual(ons.count, 16)
+        let expected = step * 60 / bpm  // 0.125 s
+        let gaps = zip(ons.dropFirst(), ons).map { $0 - $1 }
+        let worst = gaps.map { abs($0 - expected) }.max() ?? 0
+        print("TIMING worst gap error \(Int(worst * 1e6)) µs, gaps(ms) \(gaps.map { Int($0 * 1000) })")
+        XCTAssertLessThan(worst, 0.008, "간격 오차 \(worst * 1000) ms")
+        // 누적 드리프트: 첫 음부터 마지막 음까지 15 간격
+        XCTAssertEqual(ons.last! - ons.first!, expected * 15, accuracy: 0.01)
+    }
+
+    /// stop 알림은 끝난 재생의 session 과 함께 온다. 곡이 끝나 스스로 멈춰도 마찬가지.
+    func testStopReportsSession() {
+        let player = MidiPlayer()
+        let stopped = expectation(description: "onStop")
+        stopped.expectedFulfillmentCount = 2
+        let seen = OSAllocatedUnfairLock(initialState: [Int]())
+        player.onStop = { id in
+            seen.withLock { $0.append(id) }
+            stopped.fulfill()
+        }
+        let short = Song(title: "s", bpm: 120, events: [NoteEvent(channel: 0, pitch: 60, velocity: 90, start: 0, length: 0.1)], totalBeats: 0.2)
+        let first = player.play(short, loop: false)  // 0.1 초 뒤 스스로 멈춤
+        Thread.sleep(forTimeInterval: 0.3)
+        let second = player.play(short, loop: true)  // 반복 중 stop()
+        Thread.sleep(forTimeInterval: 0.15)
+        player.stop()
+        wait(for: [stopped], timeout: 2)
+        XCTAssertEqual(seen.withLock { $0 }, [first, second])
+        XCTAssertNotEqual(first, second)
     }
 }
 
@@ -133,5 +183,33 @@ final class ListenOptionsEndToEndTests: XCTestCase {
             $0.listenOptions.twoOctaves = true
         }
         XCTAssertEqual(Set(notes), [60, 64, 67])
+    }
+
+    /// 정지 직후 바로 다시 재생하면, 늦게 도착한 이전 재생의 정지 알림이 새 재생 상태를 덮어쓰지 않는다.
+    @MainActor
+    func testStopThenPlayKeepsPlayingState() async throws {
+        let m = AppModel()
+        m.bpm = 60
+        m.listen(.scale)
+        m.stop()
+        m.listen(.scale)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(m.isPlaying)
+        m.stop()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(m.isPlaying)
+    }
+
+    /// 진행 알림이 position 에 반영되고, 자동 정지 뒤에는 0 으로 돌아온다.
+    @MainActor
+    func testProgressAdvancesAndResets() async throws {
+        let m = AppModel()
+        m.bpm = 200
+        m.listen(.chord)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertGreaterThan(m.position, 0.2)
+        try await Task.sleep(for: .seconds(m.duration + 0.3))
+        XCTAssertFalse(m.isPlaying)
+        XCTAssertEqual(m.position, 0)
     }
 }

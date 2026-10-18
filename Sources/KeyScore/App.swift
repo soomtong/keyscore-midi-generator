@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -14,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct KeyScoreApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = AppModel()
+    @State private var model = AppModel()
 
     init() {
         let args = CommandLine.arguments

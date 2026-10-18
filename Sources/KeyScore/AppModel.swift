@@ -1,14 +1,18 @@
 import AppKit
-import Combine
 import Foundation
-import SwiftUI
+import Observation
 
+/// 앱 상태. `@Observable` 이라 SwiftUI 는 실제로 읽은 프로퍼티가 바뀐 뷰만 다시 그린다
+/// (재생 중 position 이 초당 20회 바뀌어도 진행 표시만 갱신된다).
 @MainActor
-final class AppModel: ObservableObject {
+@Observable
+final class AppModel {
     /// 곡 길이(분): 30초 단위로 자유롭게 조절. 눈금자에는 lengthLandmarks 만 숫자로 표시한다.
     static let lengthRange: ClosedRange<Double> = 0.5...12
     static let lengthStep = 0.5
     static let lengthLandmarks: [Double] = [1, 3, 5, 8, 12]
+    /// 청취 중 값을 바꾸면 이 시간 뒤에 새 설정으로 다시 시작한다.
+    static let autoReplayDelay: Duration = .milliseconds(150)
 
     static func snapLength(_ m: Double) -> Double {
         min(lengthRange.upperBound, max(lengthRange.lowerBound, (m / lengthStep).rounded() * lengthStep))
@@ -23,121 +27,113 @@ final class AppModel: ObservableObject {
     enum Tab: Hashable { case generate, listen }
     enum PreviewKind { case scale, chord, progression, melody }
 
-    @Published var tab: Tab = .generate
-    @Published var showSettings = false
+    var tab: Tab = .generate
+    var showSettings = false
     /// 하단 단축키 패널. 처음에는 열려 있고, 닫은 상태는 다음 실행에도 기억한다.
-    @Published var showShortcuts = UserDefaults.standard.object(forKey: "ui.showShortcuts") as? Bool ?? true {
+    var showShortcuts = UserDefaults.standard.object(forKey: "ui.showShortcuts") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showShortcuts, forKey: "ui.showShortcuts") }
     }
     /// 텍스트 입력 중에는 메뉴의 평문 단축키를 비활성화한다.
-    @Published var isTyping = false
+    var isTyping = false
 
-    // 공통
-    @Published var root = 0
-    @Published var scaleIndex = 0
-    @Published var bpm = 100.0
-    @Published var complexity = 2
-    @Published var loop = false { didSet { player.setLoop(loop) } }
-    @Published var chordPattern: ChordPattern = .block
-    @Published var melodyStyle: MelodyStyle = .free
-    @Published var melodyChannel = 1
-    @Published var chordChannel = 2
-    @Published var bassChannel = 3
-    @Published var secondChannel = 4
+    // 공통. 청취 소리에 영향을 주는 값은 바뀌면 자동 재생을 예약한다.
+    var root = 0 { didSet { scheduleAutoReplay() } }
+    var scaleIndex = 0 { didSet { scheduleAutoReplay() } }
+    var bpm = 100.0 { didSet { scheduleAutoReplay() } }
+    var complexity = 2 { didSet { scheduleAutoReplay() } }
+    var loop = false { didSet { player.setLoop(loop) } }
+    /// 코드 패턴은 패턴 듣기(코드 진행 재생)에서만 소리에 영향을 준다
+    var chordPattern: ChordPattern = .block { didSet { scheduleAutoReplay(patternOnly: true) } }
+    var melodyStyle: MelodyStyle = .free { didSet { scheduleAutoReplay() } }
+    var melodyChannel = 1
+    var chordChannel = 2
+    var bassChannel = 3
+    var secondChannel = 4
     /// 리프는 Riff 로 생성할 때만 요청하므로, 다른 설정으로 만든 곡에서 Riff 로 바꾸면 소리가 없다는 것을 알린다.
-    @Published var secondPart: SecondPart = .off {
+    var secondPart: SecondPart = .off {
         didSet {
             let missing = secondPart == .riff && arrangement.map { $0.sections.values.allSatisfy { $0.riff.isEmpty } } == true
             status = "두 번째 파트: \(secondPart.rawValue) (ch \(secondChannel))"
                 + (missing ? " — 이 곡에는 리프가 없습니다. Riff 로 다시 생성하세요" : "")
         }
     }
-    @Published var rhythmChannel = 10
-    @Published var drumPattern: DrumPattern = .off
-    @Published var formPreset: FormPreset = .free
+    var rhythmChannel = 10 { didSet { scheduleAutoReplay() } }
+    var drumPattern: DrumPattern = .off { didSet { scheduleAutoReplay() } }
+    var formPreset: FormPreset = .free
 
     // 생성
-    @Published var minutes = 3.0
-    @Published var mood = ""
-    @Published var model = ModelCatalog.initial() { didSet { ModelCatalog.save(model) } }
-    @Published var apiKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] ?? Keychain.load() ?? ""
-    @Published var arrangement: Arrangement?
+    var minutes = 3.0
+    var mood = ""
+    var model = ModelCatalog.initial() { didSet { ModelCatalog.save(model) } }
+    /// 환경변수 OPENROUTER_API_KEY > Keychain. init 에서 채운다.
+    var apiKey = ""
+    var arrangement: Arrangement?
     /// 지금 곡을 전개할 때 쓴 설정과 생성할 때 쓴 설정. 화면의 곡 정보는 이 값으로 그려 들리는 곡과 맞춘다.
-    @Published private(set) var arrangedWith: ArrangeSettings?
-    @Published private(set) var generatedWith: PromptSettings?
-    @Published var isGenerating = false
+    private(set) var arrangedWith: ArrangeSettings?
+    private(set) var generatedWith: PromptSettings?
+    /// 지금 곡이 실제로 전개된 섹션 배치 (타임라인 표시용). 설정을 바꿔도 다시 전개하기 전에는 그대로다.
+    private(set) var layout: [(name: String, bars: Int)] = []
+    var isGenerating = false
 
     /// 일시적인 안내/오류 메시지. 비어 있으면 숨긴다. (상시 상태는 상단 디스플레이 아이콘이 맡는다.)
-    @Published var status = "" { didSet { scheduleStatusClear() } }
+    var status = "" { didSet { scheduleStatusClear() } }
 
     // 청취
-    @Published var chordQualityIndex = 0
-    @Published var progressionIndex = 0
-    @Published var listenOptions = ListenOptions()
-    @Published var autoReplay = true
+    var chordQualityIndex = 0 { didSet { scheduleAutoReplay() } }
+    var progressionIndex = 0 { didSet { scheduleAutoReplay() } }
+    var listenOptions = ListenOptions() { didSet { scheduleAutoReplay() } }
+    var autoReplay = true
 
     // 페달: Tab 을 누르고 있는 동안(held) 또는 고정(latched)이면 서스테인(CC64)
-    @Published var pedalHeld = false { didSet { syncPedal() } }
-    @Published var pedalLatched = false { didSet { syncPedal() } }
+    var pedalHeld = false { didSet { syncPedal() } }
+    var pedalLatched = false { didSet { syncPedal() } }
     var pedalActive: Bool { pedalHeld || pedalLatched }
 
     // 재생
-    @Published var isPlaying = false
-    @Published var position = 0.0
-    @Published var duration = 0.0
-    @Published var nowPlaying = ""
+    var isPlaying = false
+    var position = 0.0
+    var duration = 0.0
+    var nowPlaying = ""
     /// 현재 재생 중인 것이 생성된 곡(true)인지 청취용 프리뷰(false)인지
-    @Published var playingArrangement = false
+    var playingArrangement = false
     /// MIDI Note On 이 나가는 순간 잠깐 켜지는 표시등
-    @Published var midiActive = false
+    var midiActive = false
 
-    private let player = MidiPlayer()
-    private var song: Song?
-    private var lastPreview: PreviewKind?
-    private var statusTask: Task<Void, Never>?
-    private var midiTask: Task<Void, Never>?
-    private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored private let player = MidiPlayer()
+    @ObservationIgnored private var song: Song?
+    @ObservationIgnored private var lastPreview: PreviewKind?
+    @ObservationIgnored private var playSession = 0
+    @ObservationIgnored private var statusTask: Task<Void, Never>?
+    @ObservationIgnored private var midiTask: Task<Void, Never>?
+    @ObservationIgnored private var autoReplayTask: Task<Void, Never>?
+    @ObservationIgnored private var generateTask: Task<Void, Never>?
+    /// Keychain 에 들어 있는(또는 환경변수로 받은) 키. 같은 값이면 다시 쓰지 않고, 환경변수 키는 Keychain 에 남기지 않는다.
+    @ObservationIgnored private var persistedKey = ""
 
     var scale: ScaleType { Theory.scales[scaleIndex] }
     var channels: ChannelMap { ChannelMap(melody: melodyChannel, chords: chordChannel, bass: bassChannel, second: secondChannel, rhythm: rhythmChannel) }
     var hasAPIKey: Bool { !apiKey.isEmpty }
 
     init() {
+        let key = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] ?? Keychain.load() ?? ""
+        apiKey = key
+        persistedKey = key
         player.onProgress = { [weak self] t in
             Task { @MainActor in self?.position = t }
         }
-        player.onStop = { [weak self] in
-            Task { @MainActor in
-                self?.isPlaying = false
-                self?.position = 0
-            }
+        player.onStop = { [weak self] session in
+            Task { @MainActor in self?.playbackStopped(session) }
         }
         player.onActivity = { [weak self] in
             Task { @MainActor in self?.flashMIDI() }
         }
+    }
 
-        // 자동 재생: 청취 중에 값을 바꾸면 잠시 뒤 새 설정으로 다시 시작
-        let triggers: [AnyPublisher<Void, Never>] = [
-            $root.map { _ in }.eraseToAnyPublisher(),
-            $scaleIndex.map { _ in }.eraseToAnyPublisher(),
-            $bpm.map { _ in }.eraseToAnyPublisher(),
-            $complexity.map { _ in }.eraseToAnyPublisher(),
-            $melodyStyle.map { _ in }.eraseToAnyPublisher(),
-            $chordQualityIndex.map { _ in }.eraseToAnyPublisher(),
-            $progressionIndex.map { _ in }.eraseToAnyPublisher(),
-            $listenOptions.map { _ in }.eraseToAnyPublisher(),
-            $drumPattern.map { _ in }.eraseToAnyPublisher(),
-            $rhythmChannel.map { _ in }.eraseToAnyPublisher(),
-        ]
-        Publishers.MergeMany(triggers)
-            .debounce(for: .milliseconds(150), scheduler: DispatchQueue.main)
-            .sink { [weak self] in self?.autoReplayIfNeeded() }
-            .store(in: &cancellables)
-        // 코드 패턴은 패턴 듣기(코드 진행 재생)에서만 소리에 영향을 준다
-        $chordPattern.map { _ in }
-            .debounce(for: .milliseconds(150), scheduler: DispatchQueue.main)
-            .sink { [weak self] in self?.autoReplayIfNeeded(patternOnly: true) }
-            .store(in: &cancellables)
+    deinit {
+        statusTask?.cancel()
+        midiTask?.cancel()
+        autoReplayTask?.cancel()
+        generateTask?.cancel()
     }
 
     /// 곡 재료를 무작위로 바꾼다. 청취 옵션(rate/음 길이)은 includeListenOptions 일 때만.
@@ -165,7 +161,15 @@ final class AppModel: ObservableObject {
         status = "Randomize: " + summary
     }
 
-    func saveKey() { Keychain.save(apiKey) }
+    /// 사용자가 바꾼 키만 Keychain 에 쓴다.
+    func saveKey() {
+        guard apiKey != persistedKey else { return }
+        if Keychain.save(apiKey) {
+            persistedKey = apiKey
+        } else {
+            status = "실패: API key 를 Keychain 에 저장하지 못했습니다"
+        }
+    }
 
     // MARK: 상태 표시
 
@@ -199,7 +203,7 @@ final class AppModel: ObservableObject {
         duration = s.seconds
         nowPlaying = s.title
         isPlaying = true
-        player.play(s, loop: loop)
+        playSession = player.play(s, loop: loop)
     }
 
     func stop() { player.stop() }
@@ -208,6 +212,13 @@ final class AppModel: ObservableObject {
 
     func togglePlayback() {
         if isPlaying { stop() } else { replay() }
+    }
+
+    /// 정지 알림. 정지 직후 새 재생을 시작했으면 이전 재생의 알림은 무시한다.
+    private func playbackStopped(_ session: Int) {
+        guard session == playSession else { return }
+        isPlaying = false
+        position = 0
     }
 
     private func syncPedal() { player.setPedal(pedalActive) }
@@ -263,25 +274,21 @@ final class AppModel: ObservableObject {
     }
 
     func cycleDrumPattern(_ d: Int = 1) {
-        let all = DrumPattern.allCases
-        drumPattern = all[(all.firstIndex(of: drumPattern)! + d + all.count) % all.count]
+        drumPattern = drumPattern.cycled(by: d)
         status = "리듬 패턴: \(drumPattern.rawValue) (ch \(rhythmChannel))"
     }
 
     func cycleSecondPart(_ d: Int = 1) {
-        let all = SecondPart.allCases
-        secondPart = all[(all.firstIndex(of: secondPart)! + d + all.count) % all.count]
+        secondPart = secondPart.cycled(by: d)
     }
 
     func cycleChordPattern(_ d: Int = 1) {
-        let all = ChordPattern.allCases
-        chordPattern = all[(all.firstIndex(of: chordPattern)! + d + all.count) % all.count]
+        chordPattern = chordPattern.cycled(by: d)
         status = "코드 패턴: \(chordPattern.rawValue)"
     }
 
     func cycleMelodyStyle(_ d: Int = 1) {
-        let all = MelodyStyle.allCases
-        melodyStyle = all[(all.firstIndex(of: melodyStyle)! + d + all.count) % all.count]
+        melodyStyle = melodyStyle.cycled(by: d)
         status = "멜로디 패턴: \(melodyStyle.rawValue)"
     }
 
@@ -393,20 +400,30 @@ final class AppModel: ObservableObject {
         let prompt = promptSettings
         let arrange = arrangeSettings
         let client = OpenRouterClient(apiKey: apiKey, model: model)
-        Task {
+        generateTask = Task { [weak self] in
+            defer { self?.isGenerating = false }
             do {
                 let arr = try await Generator.generate(req, client: client) { [weak self] stage, step, total in
                     self?.status = "OpenRouter(\(client.model)) \(step)/\(total) \(stage.label) 구성 중…"
                 }
+                guard let self, !Task.isCancelled else { return }
                 let s = adopt(arr, prompt: prompt, arrange: arrange)
                 isGenerating = false
                 status = "\"\(arr.title)\" 생성 완료 — \(Int(s.seconds / 60))분 \(Int(s.seconds) % 60)초, 노트 \(s.events.count)개"
                 play(s, arrangement: true)
+            } catch is CancellationError {
+                self?.isGenerating = false
+                self?.status = "생성을 취소했습니다"
             } catch {
-                isGenerating = false
-                status = "실패: \(error.localizedDescription)"
+                self?.isGenerating = false
+                self?.status = "실패: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// 진행 중인 생성을 중단한다. 이미 받은 단계는 버린다.
+    func cancelGenerate() {
+        generateTask?.cancel()
     }
 
     var arrangeSettings: ArrangeSettings {
@@ -438,23 +455,18 @@ final class AppModel: ObservableObject {
         return buildSong(with: arrange)!
     }
 
-    /// arrangement 를 settings(기본: 현재 설정)로 전개하고, 그 설정을 기억한다.
+    /// arrangement 를 settings(기본: 현재 설정)로 전개하고, 그 설정과 섹션 배치를 기억한다.
     func buildSong(with settings: ArrangeSettings? = nil) -> Song? {
         guard let arrangement else { return nil }
         let used = settings ?? arrangeSettings
         arrangedWith = used
+        layout = Arranger.expandForm(arrangement.form, sections: arrangement.sections, targetBars: used.targetBars)
+            .compactMap { name in arrangement.sections[name].map { (name, $0.bars) } }
         return Arranger.build(arrangement, options: used.options)
     }
 
     /// 다음 생성/전개의 목표 마디 수 (현재 설정)
     var targetBars: Int { Arranger.targetBars(minutes: minutes, bpm: bpm) }
-
-    /// 지금 곡이 실제로 전개된 섹션 배치 (타임라인 표시용). 설정을 바꿔도 다시 전개하기 전에는 그대로다.
-    var layout: [(name: String, bars: Int)] {
-        guard let arrangement, let used = arrangedWith else { return [] }
-        return Arranger.expandForm(arrangement.form, sections: arrangement.sections, targetBars: used.targetBars)
-            .compactMap { name in arrangement.sections[name].map { (name, $0.bars) } }
-    }
 
     func rebuildAndPlay() {
         if let s = buildSong() { play(s, arrangement: true) }
@@ -491,13 +503,32 @@ final class AppModel: ObservableObject {
         play(s)
     }
 
-    private func autoReplayIfNeeded(patternOnly: Bool = false) {
+    /// 자동 재생 디바운스: 값이 연달아 바뀌면 마지막 변경 뒤 autoReplayDelay 가 지나서 한 번만 다시 튼다.
+    private func scheduleAutoReplay(patternOnly: Bool = false) {
+        autoReplayTask?.cancel()
+        autoReplayTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.autoReplayDelay)
+            guard !Task.isCancelled else { return }
+            self?.autoReplayIfNeeded(patternOnly: patternOnly)
+        }
+    }
+
+    private func autoReplayIfNeeded(patternOnly: Bool) {
         guard autoReplay, isPlaying, !playingArrangement, let kind = lastPreview else { return }
         if patternOnly && kind != .progression { return }
         guard let s = buildPreview(kind) else { return }
-        // 값을 바꾼 직후 재생을 시작하면 150ms 뒤 이 호출이 와서 방금 시작한 재생을 처음부터 다시 틀게 된다.
+        // 값을 바꾼 직후 재생을 시작하면 잠시 뒤 이 호출이 와서 방금 시작한 재생을 처음부터 다시 틀게 된다.
         // 지금 재생 중인 것과 같은 소리라면 건드리지 않는다.
         if let current = song, current.bpm == s.bpm, current.events == s.events { return }
         play(s)
+    }
+}
+
+extension CaseIterable where Self: Equatable {
+    /// allCases 에서 d 칸 옮긴 값 (양 끝에서 순환).
+    func cycled(by d: Int) -> Self {
+        let all = Array(Self.allCases)
+        let i = all.firstIndex(of: self) ?? 0
+        return all[((i + d) % all.count + all.count) % all.count]
     }
 }

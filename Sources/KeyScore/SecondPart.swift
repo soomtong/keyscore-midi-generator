@@ -50,9 +50,7 @@ enum SecondPart: String, CaseIterable, Identifiable {
             for n in sec.riff where n.beat >= 0 && n.beat < Double(span) * 4 && offset + n.beat < end - 1e-9 {
                 let s = offset + n.beat
                 let l = max(0.1, min(n.length, end - s))
-                var p = n.pitch
-                while p > riffRange.upperBound { p -= 12 }
-                while p < riffRange.lowerBound { p += 12 }
+                var p = n.pitch.foldedIntoOctaveRange(riffRange)
                 if clashes(p, s, l) {
                     p -= 12
                     if p < 36 || clashes(p, s, l) { continue }

@@ -15,9 +15,11 @@ private enum Theme {
 private enum Field { case mood, apiKey, model }
 
 struct ContentView: View {
-    @ObservedObject var m: AppModel
+    @Bindable var m: AppModel
     @FocusState private var focus: Field?
     @State private var keyMonitor = MonitorBox()
+    /// 헤더 아이콘. 본문이 다시 그려질 때마다 아이콘을 새로 렌더링하지 않도록 한 번만 만든다.
+    private static let headerIcon = AppIcon.image(size: 96, flat: true)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +48,7 @@ struct ContentView: View {
         .frame(minWidth: 800, minHeight: 620)
         .onAppear {
             installKeyMonitor()
-            DispatchQueue.main.async { releaseFocus() }  // 시작할 때 입력칸이 포커스를 잡으면 단축키가 꺼진다
+            Task { releaseFocus() }  // 시작할 때 입력칸이 포커스를 잡으면 단축키가 꺼진다
         }
         .onDisappear { removeKeyMonitor() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
@@ -58,7 +60,7 @@ struct ContentView: View {
 
     private var transportBar: some View {
         HStack(spacing: 10) {
-            Image(nsImage: AppIcon.image(size: 96, flat: true))
+            Image(nsImage: Self.headerIcon)
                 .resizable().frame(width: 30, height: 30)
             HStack(spacing: 4) {
                 ToolButton(symbol: "stop.fill", active: false, tint: accent) { m.stop() }
@@ -284,11 +286,11 @@ struct ContentView: View {
                 .controlSize(.small).focusable(false)
                 .disabled(m.arrangement == nil || m.isGenerating)
                 .help("현재 설정(템포·길이·채널·패턴)으로 다시 전개")
-            Button { m.generate() } label: {
+            Button { m.isGenerating ? m.cancelGenerate() : m.generate() } label: {
                 HStack(spacing: 4) {
                     if m.isGenerating {
                         ProgressView().controlSize(.mini)
-                        Text("생성 중…")
+                        Text("취소")
                     } else {
                         Image(systemName: "wand.and.stars")
                         Text("곡 생성")
@@ -297,7 +299,7 @@ struct ContentView: View {
                 .frame(width: 72)
             }
             .buttonStyle(.borderedProminent).focusable(false)
-            .disabled(m.isGenerating)
+            .help(m.isGenerating ? "생성 중 — 눌러서 취소" : "곡 생성 (⌘G)")
             KeyCap("⌘G", .play)
         }
     }
@@ -536,9 +538,13 @@ struct ContentView: View {
     private func installKeyMonitor() {
         guard keyMonitor.value == nil else { return }
         keyMonitor.value = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [m] event in
-            if event.type == .keyUp { return m.handleKeyUp(event) ? nil : event }
-            guard !(event.window?.firstResponder is NSText) else { return event }
-            return m.handleKey(event) ? nil : event
+            // 로컬 이벤트 모니터는 항상 메인 스레드에서 불린다
+            let handled = MainActor.assumeIsolated {
+                if event.type == .keyUp { return m.handleKeyUp(event) }
+                guard !(event.window?.firstResponder is NSText) else { return false }
+                return m.handleKey(event)
+            }
+            return handled ? nil : event
         }
     }
 
@@ -1090,6 +1096,8 @@ private struct PendingBadge: View {
     }
 }
 
+/// NSEvent 모니터 토큰 보관함. 뷰가 다시 만들어져도 같은 토큰을 들고 있어야 제거할 수 있다.
+@MainActor
 final class MonitorBox {
     var value: Any?
 }
