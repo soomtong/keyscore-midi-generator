@@ -11,8 +11,12 @@ struct KeyScoreCommands: Commands {
     @Bindable var m: AppModel
 
     var body: some Commands {
-        // 창을 복제하면 플레이어가 둘이 되므로 New Window 는 제거
-        CommandGroup(replacing: .newItem) {}
+        // 창을 복제하면 플레이어가 둘이 되므로 New Window 는 제거하고 그 자리에 내보내기를 둔다
+        CommandGroup(replacing: .newItem) {
+            Button("MIDI 파일로 내보내기…") { m.exportMIDI() }
+                .keyboardShortcut("e", modifiers: .command)
+                .disabled(m.arrangedSong == nil)
+        }
 
         CommandGroup(replacing: .appSettings) {
             Toggle("설정", isOn: Binding(get: { m.showSettings }, set: { _ in m.toggleSettings() }))

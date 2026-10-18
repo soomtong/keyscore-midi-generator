@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 /// 앱 상태. `@Observable` 이라 SwiftUI 는 실제로 읽은 프로퍼티가 바뀐 뷰만 다시 그린다
 /// (재생 중 position 이 초당 20회 바뀌어도 진행 표시만 갱신된다).
@@ -73,6 +74,8 @@ final class AppModel {
     private(set) var generatedWith: PromptSettings?
     /// 지금 곡이 실제로 전개된 섹션 배치 (타임라인 표시용). 설정을 바꿔도 다시 전개하기 전에는 그대로다.
     private(set) var layout: [(name: String, bars: Int)] = []
+    /// 마지막으로 전개한 곡. 내보내기는 이것을 그대로 쓴다 (다시 전개하면 멜로디 세기가 무작위라 들은 곡과 달라진다).
+    private(set) var arrangedSong: Song?
     var isGenerating = false
 
     /// 일시적인 안내/오류 메시지. 비어 있으면 숨긴다. (상시 상태는 상단 디스플레이 아이콘이 맡는다.)
@@ -462,7 +465,9 @@ final class AppModel {
         arrangedWith = used
         layout = Arranger.expandForm(arrangement.form, sections: arrangement.sections, targetBars: used.targetBars)
             .compactMap { name in arrangement.sections[name].map { (name, $0.bars) } }
-        return Arranger.build(arrangement, options: used.options)
+        let built = Arranger.build(arrangement, options: used.options)
+        arrangedSong = built
+        return built
     }
 
     /// 다음 생성/전개의 목표 마디 수 (현재 설정)
@@ -470,6 +475,47 @@ final class AppModel {
 
     func rebuildAndPlay() {
         if let s = buildSong() { play(s, arrangement: true) }
+    }
+
+    // MARK: 내보내기
+
+    /// 마지막으로 전개한 곡을 MIDI 파일(SMF Format 1)로 저장한다.
+    func exportMIDI() {
+        guard let song = arrangedSong, let used = arrangedWith else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.midi]
+        panel.nameFieldStringValue = Self.fileName(song.title) + ".mid"
+        panel.canCreateDirectories = true
+        let names = Self.trackNames(used)
+        Task {
+            guard await panel.begin() == .OK, let url = panel.url else { return }
+            do {
+                try MidiFile.data(song, trackNames: names).write(to: url, options: .atomic)
+                status = "MIDI 파일 저장: \(url.lastPathComponent)"
+            } catch {
+                status = "실패: MIDI 파일을 저장하지 못했습니다 (\(error.localizedDescription))"
+            }
+        }
+    }
+
+    /// 채널(0-based)별 트랙 이름. 꺼진 파트는 빼고, 같은 채널을 쓰는 파트는 " + " 로 잇는다.
+    nonisolated static func trackNames(_ s: ArrangeSettings) -> [UInt8: String] {
+        let c = s.channels
+        let parts = [("Melody", c.melody, true), ("Chords", c.chords, true), ("Bass", c.bass, true),
+                     ("Second", c.second, s.secondPart != .off), ("Rhythm", c.rhythm, s.drumPattern != .off)]
+        var names: [UInt8: [String]] = [:]
+        for (name, ch, on) in parts where on && (1...16).contains(ch) {
+            names[UInt8(ch - 1), default: []].append(name)
+        }
+        return names.mapValues { $0.joined(separator: " + ") }
+    }
+
+    /// 파일 이름으로 쓸 수 없는 문자를 바꾼다. 비면 "KeyScore".
+    nonisolated static func fileName(_ title: String) -> String {
+        var name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            .map { "/:\\".contains($0) || $0.isNewline ? "-" : String($0) }.joined()
+        while name.hasPrefix(".") { name.removeFirst() }
+        return name.isEmpty ? "KeyScore" : String(name.prefix(100))
     }
 
     // MARK: 청취

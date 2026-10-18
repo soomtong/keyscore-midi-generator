@@ -246,6 +246,10 @@ struct ContentView: View {
     /// 곡 정보 LCD 오른쪽 끝의 생성 버튼. 생성 중에도 폭이 같고, 다시 전개 버튼은 곡이 없으면 비활성으로 자리를 지킨다.
     private var generateButtons: some View {
         HStack(spacing: 6) {
+            Button { m.exportMIDI() } label: { Image(systemName: "square.and.arrow.down") }
+                .controlSize(.small).focusable(false)
+                .disabled(m.arrangedSong == nil || m.isGenerating)
+                .help("MIDI 파일로 내보내기 (⌘E)")
             Button { m.rebuildAndPlay() } label: { Image(systemName: "arrow.clockwise") }
                 .controlSize(.small).focusable(false)
                 .disabled(m.arrangement == nil || m.isGenerating)
