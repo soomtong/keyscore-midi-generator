@@ -54,6 +54,7 @@ final class AppModel: ObservableObject {
     }
     @Published var rhythmChannel = 10
     @Published var drumPattern: DrumPattern = .off
+    @Published var formPreset: FormPreset = .free
 
     // 생성
     @Published var minutes = 3.0
@@ -61,6 +62,9 @@ final class AppModel: ObservableObject {
     @Published var model = ModelCatalog.initial() { didSet { ModelCatalog.save(model) } }
     @Published var apiKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] ?? Keychain.load() ?? ""
     @Published var arrangement: Arrangement?
+    /// 지금 곡을 전개할 때 쓴 설정과 생성할 때 쓴 설정. 화면의 곡 정보는 이 값으로 그려 들리는 곡과 맞춘다.
+    @Published private(set) var arrangedWith: ArrangeSettings?
+    @Published private(set) var generatedWith: PromptSettings?
     @Published var isGenerating = false
 
     /// 일시적인 안내/오류 메시지. 비어 있으면 숨긴다. (상시 상태는 상단 디스플레이 아이콘이 맡는다.)
@@ -384,13 +388,15 @@ final class AppModel: ObservableObject {
         status = "OpenRouter(\(model))에서 생성 중…"
         let req = GenerateRequest(root: root, scale: scale, bpm: bpm, complexity: complexity, minutes: minutes, mood: mood, melodyStyle: melodyStyle,
                                   chordPattern: chordPattern, progression: Theory.progressions[progressionIndex], secondPart: secondPart,
-                                  drumPattern: drumPattern)
+                                  drumPattern: drumPattern, formPreset: formPreset)
+        // 생성 중에 설정을 바꿔도 요청한 그때의 설정으로 전개한다
+        let prompt = promptSettings
+        let arrange = arrangeSettings
         let client = OpenRouterClient(apiKey: apiKey, model: model)
         Task {
             do {
                 let arr = try await Generator.generate(req, client: client)
-                arrangement = arr
-                let s = buildSong()!
+                let s = adopt(arr, prompt: prompt, arrange: arrange)
                 isGenerating = false
                 status = "\"\(arr.title)\" 생성 완료 — \(Int(s.seconds / 60))분 \(Int(s.seconds) % 60)초, 노트 \(s.events.count)개"
                 play(s, arrangement: true)
@@ -401,19 +407,50 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 현재 템포/길이/채널/패턴으로 arrangement 를 다시 전개.
-    func buildSong() -> Song? {
-        guard let arrangement else { return nil }
-        let opts = ArrangeOptions(bpm: bpm, minutes: minutes, channels: channels, chordPattern: chordPattern, drumPattern: drumPattern, secondPart: secondPart)
-        return Arranger.build(arrangement, options: opts)
+    var arrangeSettings: ArrangeSettings {
+        ArrangeSettings(bpm: bpm, minutes: minutes, chordPattern: chordPattern, drumPattern: drumPattern,
+                        secondPart: secondPart, channels: channels)
     }
 
+    var promptSettings: PromptSettings {
+        PromptSettings(root: root, scaleIndex: scaleIndex, complexity: complexity, melodyStyle: melodyStyle,
+                       mood: mood, progressionIndex: progressionIndex, formPreset: formPreset)
+    }
+
+    /// 곡을 만든 뒤 바뀐 전개 설정 (↻ 다시 전개로 반영)
+    var pendingArrange: [String] {
+        guard arrangement != nil, let old = arrangedWith else { return [] }
+        return arrangeSettings.changes(from: old)
+    }
+
+    /// 곡을 만든 뒤 바뀐 프롬프트 설정 (다시 생성해야 반영)
+    var pendingPrompt: [String] {
+        guard arrangement != nil, let old = generatedWith else { return [] }
+        return promptSettings.changes(from: old)
+    }
+
+    /// 생성된 곡을 받아 요청 당시의 설정으로 전개한다.
+    func adopt(_ arr: Arrangement, prompt: PromptSettings, arrange: ArrangeSettings) -> Song {
+        arrangement = arr
+        generatedWith = prompt
+        return buildSong(with: arrange)!
+    }
+
+    /// arrangement 를 settings(기본: 현재 설정)로 전개하고, 그 설정을 기억한다.
+    func buildSong(with settings: ArrangeSettings? = nil) -> Song? {
+        guard let arrangement else { return nil }
+        let used = settings ?? arrangeSettings
+        arrangedWith = used
+        return Arranger.build(arrangement, options: used.options)
+    }
+
+    /// 다음 생성/전개의 목표 마디 수 (현재 설정)
     var targetBars: Int { Arranger.targetBars(minutes: minutes, bpm: bpm) }
 
-    /// 현재 템포/길이로 전개했을 때의 섹션 배치 (타임라인 표시용)
+    /// 지금 곡이 실제로 전개된 섹션 배치 (타임라인 표시용). 설정을 바꿔도 다시 전개하기 전에는 그대로다.
     var layout: [(name: String, bars: Int)] {
-        guard let arrangement else { return [] }
-        return Arranger.expandForm(arrangement.form, sections: arrangement.sections, targetBars: targetBars)
+        guard let arrangement, let used = arrangedWith else { return [] }
+        return Arranger.expandForm(arrangement.form, sections: arrangement.sections, targetBars: used.targetBars)
             .compactMap { name in arrangement.sections[name].map { (name, $0.bars) } }
     }
 

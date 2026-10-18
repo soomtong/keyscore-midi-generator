@@ -258,9 +258,15 @@ struct ContentView: View {
     private var generateTab: some View {
         VStack(alignment: .leading, spacing: 10) {
             lengthSection
-            TextField("분위기 (선택, 예: calm night jazz)", text: $m.mood)
-                .textFieldStyle(.roundedBorder).controlSize(.small)
-                .focused($focus, equals: .mood)
+            HStack(spacing: 10) {
+                TextField("분위기 (선택, 예: calm night jazz)", text: $m.mood)
+                    .textFieldStyle(.roundedBorder).controlSize(.small)
+                    .focused($focus, equals: .mood)
+                OptionLabel("FORM")
+                DarkMenu(items: FormPreset.allCases.map { ($0, $0.rawValue) }, selection: $m.formPreset)
+                    .frame(width: 170)
+                    .help(m.formPreset.summary + " (곡 생성 시 반영)")
+            }
             // 두 파트를 2단으로. 두 열은 같은 폭이고 높이도 맞춘다.
             HStack(alignment: .top, spacing: 12) {
                 secondPartSection
@@ -350,10 +356,24 @@ struct ContentView: View {
 
     private var lengthSection: some View {
         let layout = m.layout
-        let order = m.arrangement?.form.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } } ?? []
+        let order = m.arrangement?.form.all.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } } ?? []
+        let pendingArrange = m.pendingArrange
+        let pendingPrompt = m.pendingPrompt
         return VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center) {
+            // 곡 정보(SECTIONS · FORM · 타임라인)는 지금 들리는 곡 기준. 곡을 만든 뒤 바뀐 설정은 배지로 알린다.
+            HStack(alignment: .center, spacing: 6) {
                 Text("LENGTH · ARRANGEMENT").font(.system(size: 10, weight: .bold)).tracking(0.8).foregroundStyle(.secondary)
+                if !pendingArrange.isEmpty {
+                    Button { m.rebuildAndPlay() } label: {
+                        PendingBadge(text: "↻ 다시 전개 시 반영", tint: Theme.lcdText)
+                    }
+                    .buttonStyle(.plain).focusable(false)
+                    .help("바뀐 설정: \(pendingArrange.joined(separator: ", ")) — 눌러서 다시 전개")
+                }
+                if !pendingPrompt.isEmpty {
+                    PendingBadge(text: "다시 생성 시 반영", tint: .orange)
+                        .help("바뀐 설정: \(pendingPrompt.joined(separator: ", ")) — 프롬프트에 들어가는 값이라 곡 생성(⌘G)을 해야 반영됩니다")
+                }
                 Spacer()
                 KeyCap(",", .setting)
                 KeyCap(".", .setting)
@@ -1054,6 +1074,19 @@ private struct ChannelStepper: View {
 
     var body: some View {
         MiniStepper(title: title, value: channel, range: 1...16) { channel = min(16, max(1, channel + $0)) }
+    }
+}
+
+/// 곡을 만든 뒤 설정이 바뀌었음을 알리는 작은 배지
+private struct PendingBadge: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        Text(text).font(.system(size: 9, weight: .bold)).lineLimit(1)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6).padding(.vertical, 1.5)
+            .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
     }
 }
 

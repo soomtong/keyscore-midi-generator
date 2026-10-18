@@ -78,6 +78,76 @@ final class KeyScoreTests: XCTestCase {
         XCTAssertEqual(order.count, 16)  // 128마디가 125에 가장 가까움
     }
 
+    func testFormPlaysIntroOnceAndEndsWithOutro() {
+        func sec(_ n: String, _ b: Int) -> SectionSpec { SectionSpec(name: n, bars: b, chords: [], melody: []) }
+        let s = ["Intro": sec("Intro", 4), "A": sec("A", 8), "B": sec("B", 4), "Break": sec("Break", 2),
+                 "Chorus": sec("Chorus", 8), "Outro": sec("Outro", 4)]
+        let form = SongForm(intro: ["Intro"], loop: ["A", "B", "Break", "Chorus"], outro: ["Chorus", "Outro"])
+        for target in [8, 13, 25, 40, 75, 150, 300] {
+            let out = Arranger.expandForm(form, sections: s, targetBars: target)
+            XCTAssertEqual(out.first, "Intro", "\(target)")
+            XCTAssertEqual(out.filter { $0 == "Intro" }.count, 1, "\(target)")
+            XCTAssertEqual(Array(out.suffix(2)), ["Chorus", "Outro"], "\(target)")
+            XCTAssertEqual(out.filter { $0 == "Outro" }.count, 1, "\(target)")
+            XCTAssertEqual(Array(out[1..<5]), ["A", "B", "Break", "Chorus"], "\(target)")  // 한 바퀴는 반드시
+            // 간주 다음은 언제나 후렴
+            for i in out.indices where out[i] == "Break" { XCTAssertEqual(out[i + 1], "Chorus", "\(target)") }
+            let bars = out.reduce(0) { $0 + s[$1]!.bars }
+            if target >= 40 { XCTAssertLessThanOrEqual(abs(bars - target), 4, "\(target): \(out)") }
+        }
+    }
+
+    func testFlatFormIsSplitByRoleAndName() throws {
+        let json = """
+        {"title":"T","form":["Opening","Verse","후렴","Verse","후렴","Ending"],"sections":{
+          "Opening":{"role":"intro","bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[]},
+          "Verse":{"role":"Verse","bars":8,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[]},
+          "후렴":{"bars":8,"chords":[{"root":"F","quality":"maj","beats":4}],"melody":[]},
+          "Ending":{"bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[]}}}
+        """
+        let arr = try Generator.parse(json)
+        XCTAssertEqual(arr.form, SongForm(intro: ["Opening"], loop: ["Verse", "후렴", "Verse", "후렴"], outro: ["Ending"]))
+        XCTAssertEqual(arr.sections["후렴"]?.role, .chorus)  // 이름으로 추정
+        XCTAssertEqual(arr.sections["Ending"]?.role, .outro)
+        XCTAssertEqual(SectionRole(loose: "Pre-Chorus"), .prechorus)
+        XCTAssertEqual(SectionRole(loose: "interlude"), .break)
+        XCTAssertEqual(SectionRole(guessing: "간주"), .break)
+    }
+
+    func testStructuredFormAndRoleDefaultDrums() throws {
+        let json = """
+        {"title":"T","form":{"intro":["Intro"],"loop":["A","B","Break","Chorus"],"outro":["Chorus","Outro"]},"sections":{
+          "Intro":{"role":"intro","bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[]},
+          "A":{"role":"verse","bars":8,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[]},
+          "B":{"role":"prechorus","bars":4,"chords":[{"root":"D","quality":"min","beats":4}],"melody":[]},
+          "Break":{"role":"break","bars":2,"chords":[{"root":"G","quality":"maj","beats":4}],"melody":[],"drums":{"energy":"none"}},
+          "Chorus":{"role":"chorus","bars":8,"chords":[{"root":"F","quality":"maj","beats":4}],"melody":[]},
+          "Outro":{"role":"outro","bars":4,"chords":[{"root":"C","quality":"maj","beats":4}],"melody":[]}}}
+        """
+        let arr = try Generator.parse(json)
+        XCTAssertEqual(arr.form.intro, ["Intro"])
+        XCTAssertEqual(arr.form.outro, ["Chorus", "Outro"])
+        XCTAssertEqual(arr.sections["B"]?.drumPlan, DrumPlan(energy: .light, fill: true))  // drums 가 없으면 역할 기본값
+        XCTAssertEqual(arr.sections["Chorus"]?.drumPlan, DrumPlan(energy: .full))
+        XCTAssertEqual(arr.sections["Break"]?.drumPlan, DrumPlan(energy: .none))  // LLM 값이 우선
+        XCTAssertEqual(SectionSpec(name: "x", bars: 1, chords: [], melody: []).drumPlan, DrumPlan())  // 역할도 없으면 full
+    }
+
+    func testPromptDescribesFormPreset() {
+        var r = GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 100, complexity: 2, minutes: 3)
+        let free = Generator.prompt(r)
+        XCTAssertTrue(free.contains("\"loop\": [section names"))
+        XCTAssertTrue(free.contains("plays the intro sections once"))
+        XCTAssertFalse(free.contains("- form:"))
+        r.formPreset = .kpop
+        r.secondPart = .riff
+        let kpop = Generator.prompt(r)
+        XCTAssertTrue(kpop.contains("- form: use this K-pop style form exactly"))
+        XCTAssertTrue(kpop.contains("\"Break\" (break"))
+        XCTAssertFalse(kpop.contains("- interlude:"))  // 간주가 이미 있으므로 따로 요청하지 않는다
+        for p in FormPreset.allCases { XCTAssertEqual(p.promptHint == nil, p == .free, p.rawValue) }
+    }
+
     // MARK: 청취 옵션
 
     func testScaleSequenceOptions() {
@@ -296,6 +366,36 @@ final class KeyScoreTests: XCTestCase {
         XCTAssertTrue(on.contains("\"fill\": true plays a drum fill"))
         for p in DrumPattern.allCases {
             XCTAssertEqual(p.promptHint.isEmpty, p == .off, p.rawValue)
+        }
+    }
+
+    func testSongInfoFollowsArrangedSongNotLiveSettings() async {
+        let m = await AppModel()
+        await MainActor.run {
+            func sec(_ n: String, _ b: Int) -> SectionSpec { SectionSpec(name: n, bars: b, chords: [], melody: []) }
+            let arr = Arrangement(title: "t", sections: ["I": sec("I", 4), "A": sec("A", 8), "O": sec("O", 4)],
+                                  form: SongForm(intro: ["I"], loop: ["A"], outro: ["O"]))
+            m.bpm = 100
+            m.minutes = 3
+            XCTAssertTrue(m.layout.isEmpty)
+            _ = m.adopt(arr, prompt: m.promptSettings, arrange: m.arrangeSettings)
+            let before = m.layout.map(\.name)
+            XCTAssertEqual(before.count, 2 + 8)  // 4 + 8x8 + 4 = 72마디 ≈ 75
+            XCTAssertTrue(m.pendingArrange.isEmpty && m.pendingPrompt.isEmpty)
+
+            // 설정을 바꿔도 화면의 곡 정보는 그대로, 바뀐 항목만 알린다
+            m.bpm = 140
+            m.root = (m.root + 1) % 12
+            m.formPreset = .kpop
+            XCTAssertEqual(m.layout.map(\.name), before)
+            XCTAssertEqual(m.pendingArrange, ["BPM"])
+            XCTAssertEqual(m.pendingPrompt, ["Key", "FORM"])
+
+            // 다시 전개하면 새 BPM 으로 전개되고 전개 배지는 사라진다. 프롬프트 배지는 다시 생성해야 사라진다.
+            _ = m.buildSong()
+            XCTAssertGreaterThan(m.layout.count, before.count)
+            XCTAssertTrue(m.pendingArrange.isEmpty)
+            XCTAssertEqual(m.pendingPrompt, ["Key", "FORM"])
         }
     }
 

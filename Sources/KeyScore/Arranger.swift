@@ -14,16 +14,21 @@ struct SectionSpec {
     /// 두 번째 파트용 리프. riffBars 마디 길이로 섹션 끝까지 반복한다. 비어 있으면 이 섹션은 쉼.
     var riff: [MelodyNote] = []
     var riffBars = 1
-    var drums = DrumPlan()
+    /// 섹션 역할. LLM 이 주지 않으면 이름으로 추정한다 (Generator.parse).
+    var role: SectionRole? = nil
+    /// LLM 이 정한 드럼 편성. 없으면 역할의 기본값, 역할도 없으면 full.
+    var drums: DrumPlan? = nil
+
+    var drumPlan: DrumPlan { drums ?? role?.defaultDrums ?? DrumPlan() }
 }
 
 struct Arrangement {
     var title: String
     var sections: [String: SectionSpec]
-    var form: [String]
+    var form: SongForm
 }
 
-struct ChannelMap {
+struct ChannelMap: Equatable {
     var melody = 1
     var chords = 2
     var bass = 3
@@ -42,24 +47,32 @@ struct ArrangeOptions {
 }
 
 enum Arranger {
-    /// form 을 순환하며 목표 마디 수에 가장 가깝게 섹션 목록을 만든다.
-    static func expandForm(_ form: [String], sections: [String: SectionSpec], targetBars: Int) -> [String] {
-        let valid = form.filter { sections[$0] != nil }
-        let cycle = valid.isEmpty ? sections.keys.sorted() : valid
-        guard !cycle.isEmpty else { return [] }
-        var out: [String] = []
-        var bars = 0
-        var i = 0
-        while bars < targetBars {
-            let name = cycle[i % cycle.count]
-            let b = max(1, sections[name]!.bars)
-            // 마지막 섹션은 넘치는 분량이 더 가까울 때만 추가
-            if bars + b > targetBars && (bars + b - targetBars) > (targetBars - bars) && !out.isEmpty { break }
-            out.append(name)
-            bars += b
-            i += 1
+    /// intro 를 한 번, loop 를 한 바퀴 이상, outro 를 한 번 놓아 목표 마디 수에 가장 가깝게 섹션 목록을 만든다.
+    /// 남는 길이는 loop 의 뒷부분(후렴 쪽)으로 채운다. 반복 절의 앞(A)을 줄이는 셈이라 간주 → 후렴 흐름이 유지된다.
+    /// 곡이 짧아도 intro · loop 한 바퀴 · outro 는 남긴다.
+    static func expandForm(_ form: SongForm, sections: [String: SectionSpec], targetBars: Int) -> [String] {
+        func valid(_ names: [String]) -> [String] { names.filter { sections[$0] != nil } }
+        var intro = valid(form.intro), loop = valid(form.loop), outro = valid(form.outro)
+        if loop.isEmpty { (loop, intro, outro) = (intro + outro, [], []) }
+        if loop.isEmpty { loop = sections.keys.sorted() }
+        guard !loop.isEmpty else { return [] }
+        func bars<C: Collection>(_ names: C) -> Int where C.Element == String {
+            names.reduce(0) { $0 + max(1, sections[$1]!.bars) }
         }
-        return out
+        let fixed = bars(intro) + bars(outro)
+        let loopBars = bars(loop)
+        var best = (passes: 1, tail: 0, diff: Int.max, total: Int.max)
+        var passes = 1
+        while true {
+            for tail in 0..<loop.count {
+                let total = fixed + passes * loopBars + bars(loop.suffix(tail))
+                let diff = abs(total - targetBars)
+                if diff < best.diff || (diff == best.diff && total < best.total) { best = (passes, tail, diff, total) }
+            }
+            if fixed + passes * loopBars >= targetBars { break }
+            passes += 1
+        }
+        return intro + Array(repeating: loop, count: best.passes).flatMap { $0 } + loop.suffix(best.tail) + outro
     }
 
     static func targetBars(minutes: Double, bpm: Double, beatsPerBar: Int = 4) -> Int {
@@ -106,7 +119,7 @@ enum Arranger {
             }
 
             // 리듬: 앞 섹션보다 세지거나 앞 섹션이 필인으로 끝났을 때만 크래시
-            let plan = sec.drums
+            let plan = sec.drumPlan
             events += o.drumPattern.notes(start: cursor, beats: secBeats, channel: UInt8(ch.rhythm - 1),
                                           crashOnStart: previous.energy < plan.energy || previous.fill,
                                           energy: plan.energy, fill: plan.fill)

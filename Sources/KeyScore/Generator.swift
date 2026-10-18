@@ -12,6 +12,7 @@ struct GenerateRequest {
     var progression: Theory.Progression? = nil
     var secondPart: SecondPart = .off
     var drumPattern: DrumPattern = .off
+    var formPreset: FormPreset = .free
 }
 
 enum Generator {
@@ -86,28 +87,31 @@ enum Generator {
         - tempo: \(Int(r.bpm)) BPM, 4/4 (\(tempoFeel(r.bpm)))
         - chord complexity \(r.complexity)/\(Theory.maxComplexity): \(complexityText)
         - melodic complexity: \(melodicText)
-        - total length about \(String(format: "%g", r.minutes)) minutes, roughly \(target) bars (the host will repeat the form; do not write the full length)
+        - total length about \(String(format: "%g", r.minutes)) minutes, roughly \(target) bars. The host plays the intro sections once, repeats the loop sections to fill the length, then plays the outro sections once to end the song; do not write the full length.
+        \(r.formPreset.promptHint.map { "- form: \($0)" } ?? "")
         - accompaniment: the host plays every chord as \(r.chordPattern.promptHint). Write chords and a melody that fit this accompaniment.
         \(progression.map { "- harmonic backbone: use this progression for the main section: \($0). Other sections may vary or reharmonize it." } ?? "")
         \(r.mood.isEmpty ? "" : "- mood: \(r.mood)")
         \(r.melodyStyle == .free ? "" : "- melody style (\(r.melodyStyle.rawValue)): \(r.melodyStyle.promptHint)")
         \(drums ? "- drums: the host plays a \(r.drumPattern.promptHint). Write a melody that sits in this groove." : "")
-        \(riff ? "- interlude: include one dramatic instrumental section (for example Interlude or Break) with an empty melody, where the riff carries the music over contrasting, more intense chords." : "")
+        \(riff && r.formPreset != .kpop ? "- interlude: include one dramatic break section in the loop (role break, empty melody), where the riff carries the music over contrasting, more intense chords." : "")
 
         JSON schema:
         {
           "title": string,
-          "form": [section names in play order, \(lay.formEntries) entries, may repeat names],
+          "form": {"intro": [section names played once at the start, may be empty], "loop": [section names in play order, repeated to fill the length, may repeat names], "outro": [section names played once at the end]},
           "sections": {
             "<name>": {
-              "bars": integer 4..\(lay.maxBars),
+              "role": one of "intro" | "verse" | "prechorus" | "break" | "chorus" | "bridge" | "outro",
+              "bars": integer 4..\(lay.maxBars) (a break may be 1 to 4),
               "chords": [{"root": "C", "quality": one of [\(qualities)], "beats": 4}],
               "melody": [[beat, midi_pitch, length_in_beats], ...]\(riff ? ",\n      \"riff\": {\"bars\": 1 or 2, \"notes\": [[beat, midi_pitch, length_in_beats], ...]}" : "")\(drums ? ",\n      \"drums\": {\"energy\": \"none\" | \"light\" | \"full\", \"fill\": true or false}" : "")
             }
           }
         }
         Rules:
-        - Define \(lay.sections) sections (for example Intro, A, B, Outro) with contrasting character.
+        - \(r.formPreset == .free ? "Define \(lay.sections) sections (for example Intro, A, B, Outro) with contrasting character; the loop has \(lay.formEntries) entries." : "Define exactly the sections of the given form; keep sections short (4 to \(lay.maxBars) bars) so the loop can repeat.")
+        - roles: verse is calm and low, prechorus builds tension, chorus is the highest and most memorable hook, a break has an empty melody (an instrumental moment), bridge contrasts, intro and outro are short and lighter.
         - chords: cover the whole section; the list loops if shorter. Chord roots should be diatonic to the scale unless a borrowed chord is musically intended.
         - melody: beat is the offset from the section start (0 <= beat < bars*4), pitches within MIDI 60..88 and mostly from the scale notes, with rests, repeated motifs and phrase shape. Density: \(r.melodyStyle.notesPerBar). Notes must not overlap.
         \(riff ? riffRules : "")
@@ -147,14 +151,23 @@ enum Generator {
                     spec.riff.append(MelodyNote(beat: n[0].doubleValue, pitch: n[1].intValue, length: n[2].doubleValue))
                 }
             }
+            spec.role = (s["role"] as? String).flatMap(SectionRole.init(loose:)) ?? SectionRole(guessing: name)
             if let d = s["drums"] as? [String: Any] {
-                spec.drums.energy = (d["energy"] as? String).flatMap { DrumPlan.Energy(rawValue: $0.lowercased()) } ?? .full
-                spec.drums.fill = (d["fill"] as? Bool) ?? false
+                spec.drums = DrumPlan(
+                    energy: (d["energy"] as? String).flatMap { DrumPlan.Energy(rawValue: $0.lowercased()) } ?? .full,
+                    fill: (d["fill"] as? Bool) ?? false)
             }
             sections[name] = spec
         }
         guard !sections.isEmpty else { throw OpenRouterError.badJSON("유효한 section 없음") }
-        let form = (obj["form"] as? [String]) ?? []
+        let form: SongForm
+        if let f = obj["form"] as? [String: Any] {
+            let parsed = SongForm(intro: f["intro"] as? [String] ?? [], loop: f["loop"] as? [String] ?? [], outro: f["outro"] as? [String] ?? [])
+            // intro/outro 를 비우고 전부 loop 에 넣은 응답도 역할로 다시 나눈다
+            form = parsed.intro.isEmpty && parsed.outro.isEmpty ? SongForm.split(parsed.loop, sections: sections) : parsed
+        } else {
+            form = SongForm.split(obj["form"] as? [String] ?? [], sections: sections)
+        }
         return Arrangement(title: (obj["title"] as? String) ?? "Untitled", sections: sections, form: form)
     }
 
