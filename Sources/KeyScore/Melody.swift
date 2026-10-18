@@ -59,6 +59,19 @@ enum MelodyStyle: String, CaseIterable, Identifiable {
         }
     }
 
+    /// 프롬프트용 마디당 음 수. 패턴마다 밀도가 크게 다르다 (Scale Run 은 8, Sparse 는 1~2).
+    var notesPerBar: String {
+        switch self {
+        case .free: return "roughly 2 to 5 notes per bar"
+        case .motif, .callResponse, .walking, .question: return "roughly 3 to 5 notes per bar"
+        case .scalarRun, .pentatonicRiff, .syncopated, .pedalPoint, .arpeggio: return "roughly 5 to 8 notes per bar"
+        case .tripletRun: return "roughly 8 to 12 notes per bar (triplet eighths, fractional beats such as 0.333 are allowed)"
+        case .sequence, .inversion: return "roughly 3 to 6 notes per bar"
+        case .sparse: return "only 1 or 2 notes per bar, mostly long"
+        case .descent: return "roughly 1 to 3 notes per bar, long notes"
+        }
+    }
+
     typealias PhraseNote = (degree: Int, beat: Double, length: Double)
 
     /// 스케일 디그리(0 = 으뜸음) 기준 4마디(16박) 프레이즈. free 는 비어 있음.

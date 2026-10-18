@@ -8,6 +8,8 @@ struct GenerateRequest {
     var minutes: Double
     var mood: String = ""
     var melodyStyle: MelodyStyle = .free
+    var chordPattern: ChordPattern = .block
+    var progression: Theory.Progression? = nil
 }
 
 enum Generator {
@@ -16,7 +18,43 @@ enum Generator {
     You write short reusable song sections; the host program repeats them to reach the required length.
     """
 
+    /// 선택된 진행을 현재 Key/Scale/복잡도의 코드로 풀어 쓴다 (예: "D min7 - G 7 - C maj7").
+    /// 복잡도에 맞는 코드 종류가 없으면 구성음을 줄여 가장 가까운 종류를 찾고, 그래도 없으면 nil.
+    static func progressionText(_ r: GenerateRequest) -> String? {
+        guard let prog = r.progression else { return nil }
+        var parts: [String] = []
+        for d in prog.degrees {
+            let ivs = Theory.diatonicIntervals(scale: r.scale, degree: d, complexity: r.complexity)
+            guard let q = (1...ivs.count).reversed().lazy.compactMap({ Theory.quality(matching: Array(ivs.prefix($0))) }).first
+            else { return nil }
+            let pc = (r.root + r.scale.intervals[d % r.scale.intervals.count]) % 12
+            parts.append("\(noteNames[pc]) \(q.symbol)")
+        }
+        return parts.joined(separator: " - ")
+    }
+
+    /// 목표 길이에 맞춘 구성 크기. 짧은 곡에 섹션을 많이 요구하면 한 바퀴도 못 돈다.
+    static func layout(targetBars: Int) -> (sections: String, formEntries: String, maxBars: Int) {
+        switch targetBars {
+        case ..<24: return ("2 or 3", "3 to 5", 8)
+        case ..<64: return ("3 or 4", "5 to 8", 16)
+        default: return ("3 or 4", "6 to 10", 16)
+        }
+    }
+
+    /// 템포가 주는 리듬 감각.
+    static func tempoFeel(_ bpm: Double) -> String {
+        switch bpm {
+        case ..<80: return "slow: favor long notes, space and lyrical phrasing"
+        case ..<110: return "moderate: balanced rhythm with room to breathe"
+        default: return "fast: favor rhythmic drive and shorter, more energetic figures"
+        }
+    }
+
     static func prompt(_ r: GenerateRequest) -> String {
+        let target = Arranger.targetBars(minutes: r.minutes, bpm: r.bpm)
+        let lay = layout(targetBars: target)
+        let progression = progressionText(r)
         let scaleNotes = r.scale.intervals.map { noteNames[(r.root + $0) % 12] }.joined(separator: " ")
         let qualities = Theory.chordQualities.filter { $0.complexity <= r.complexity }.map(\.symbol).joined(separator: ", ")
         let complexityText = [
@@ -34,29 +72,31 @@ enum Generator {
         return """
         Compose a piece with these constraints:
         - key: \(noteNames[r.root]), scale: \(r.scale.name) (notes: \(scaleNotes))
-        - tempo: \(Int(r.bpm)) BPM, 4/4
+        - tempo: \(Int(r.bpm)) BPM, 4/4 (\(tempoFeel(r.bpm)))
         - chord complexity \(r.complexity)/\(Theory.maxComplexity): \(complexityText)
         - melodic complexity: \(melodicText)
-        - total length about \(String(format: "%g", r.minutes)) minutes (the host will repeat the form; do not write the full length)
+        - total length about \(String(format: "%g", r.minutes)) minutes, roughly \(target) bars (the host will repeat the form; do not write the full length)
+        - accompaniment: the host plays every chord as \(r.chordPattern.promptHint). Write chords and a melody that fit this accompaniment.
+        \(progression.map { "- harmonic backbone: use this progression for the main section: \($0). Other sections may vary or reharmonize it." } ?? "")
         \(r.mood.isEmpty ? "" : "- mood: \(r.mood)")
         \(r.melodyStyle == .free ? "" : "- melody style (\(r.melodyStyle.rawValue)): \(r.melodyStyle.promptHint)")
 
         JSON schema:
         {
           "title": string,
-          "form": [section names in play order, 6 to 10 entries, may repeat names],
+          "form": [section names in play order, \(lay.formEntries) entries, may repeat names],
           "sections": {
             "<name>": {
-              "bars": integer 4..16,
+              "bars": integer 4..\(lay.maxBars),
               "chords": [{"root": "C", "quality": one of [\(qualities)], "beats": 4}],
               "melody": [[beat, midi_pitch, length_in_beats], ...]
             }
           }
         }
         Rules:
-        - Define 3 or 4 sections (for example Intro, A, B, Outro) with contrasting character.
+        - Define \(lay.sections) sections (for example Intro, A, B, Outro) with contrasting character.
         - chords: cover the whole section; the list loops if shorter. Chord roots should be diatonic to the scale unless a borrowed chord is musically intended.
-        - melody: beat is the offset from the section start (0 <= beat < bars*4), pitches within MIDI 60..88 and mostly from the scale notes, with rests, repeated motifs and phrase shape. Roughly 2 to 5 notes per bar. Notes must not overlap.
+        - melody: beat is the offset from the section start (0 <= beat < bars*4), pitches within MIDI 60..88 and mostly from the scale notes, with rests, repeated motifs and phrase shape. Density: \(r.melodyStyle.notesPerBar). Notes must not overlap.
         - No other fields.
         """
     }

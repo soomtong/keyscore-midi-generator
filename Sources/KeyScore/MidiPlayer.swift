@@ -1,7 +1,7 @@
 import CoreMIDI
 import Foundation
 
-/// CoreMIDI 가상 소스 "KeyScore" 로 이벤트를 송신한다. Omnisphere 등에서 이 소스를 MIDI 입력으로 선택한다.
+/// CoreMIDI 가상 소스 "KeyScore" 로 이벤트를 송신한다. 가상악기/외장악기에서 이 소스를 MIDI 입력으로 선택한다.
 final class MidiPlayer: @unchecked Sendable {
     private struct Message {
         var time: Double

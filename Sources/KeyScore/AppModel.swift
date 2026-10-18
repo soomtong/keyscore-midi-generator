@@ -43,6 +43,8 @@ final class AppModel: ObservableObject {
     @Published var melodyChannel = 1
     @Published var chordChannel = 2
     @Published var bassChannel = 3
+    @Published var rhythmChannel = 10
+    @Published var drumPattern: DrumPattern = .off
 
     // 생성
     @Published var minutes = 3.0
@@ -84,7 +86,7 @@ final class AppModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     var scale: ScaleType { Theory.scales[scaleIndex] }
-    var channels: ChannelMap { ChannelMap(melody: melodyChannel, chords: chordChannel, bass: bassChannel) }
+    var channels: ChannelMap { ChannelMap(melody: melodyChannel, chords: chordChannel, bass: bassChannel, rhythm: rhythmChannel) }
     var hasAPIKey: Bool { !apiKey.isEmpty }
 
     init() {
@@ -111,6 +113,8 @@ final class AppModel: ObservableObject {
             $chordQualityIndex.map { _ in }.eraseToAnyPublisher(),
             $progressionIndex.map { _ in }.eraseToAnyPublisher(),
             $listenOptions.map { _ in }.eraseToAnyPublisher(),
+            $drumPattern.map { _ in }.eraseToAnyPublisher(),
+            $rhythmChannel.map { _ in }.eraseToAnyPublisher(),
         ]
         Publishers.MergeMany(triggers)
             .debounce(for: .milliseconds(150), scheduler: DispatchQueue.main)
@@ -245,6 +249,12 @@ final class AppModel: ObservableObject {
         status = "길이 \(Self.lengthLabel(minutes))"
     }
 
+    func cycleDrumPattern(_ d: Int = 1) {
+        let all = DrumPattern.allCases
+        drumPattern = all[(all.firstIndex(of: drumPattern)! + d + all.count) % all.count]
+        status = "리듬 패턴: \(drumPattern.rawValue) (ch \(rhythmChannel))"
+    }
+
     func cycleChordPattern(_ d: Int = 1) {
         let all = ChordPattern.allCases
         chordPattern = all[(all.firstIndex(of: chordPattern)! + d + all.count) % all.count]
@@ -327,6 +337,7 @@ final class AppModel: ObservableObject {
         case ".": shiftLength(1)
         case "a": cycleChordPattern(shift ? -1 : 1)
         case "m": cycleMelodyStyle(shift ? -1 : 1)
+        case "d": cycleDrumPattern(shift ? -1 : 1)
         case "g": listen(.melody)
         // S/C/F: 듣기, Shift: 다음 선택 (⌥ 는 메뉴에서 이전 선택)
         case "s":
@@ -356,7 +367,8 @@ final class AppModel: ObservableObject {
         saveKey()
         isGenerating = true
         status = "OpenRouter(\(model))에서 생성 중…"
-        let req = GenerateRequest(root: root, scale: scale, bpm: bpm, complexity: complexity, minutes: minutes, mood: mood, melodyStyle: melodyStyle)
+        let req = GenerateRequest(root: root, scale: scale, bpm: bpm, complexity: complexity, minutes: minutes, mood: mood, melodyStyle: melodyStyle,
+                                  chordPattern: chordPattern, progression: Theory.progressions[progressionIndex])
         let client = OpenRouterClient(apiKey: apiKey, model: model)
         Task {
             do {
@@ -376,7 +388,7 @@ final class AppModel: ObservableObject {
     /// 현재 템포/길이/채널/패턴으로 arrangement 를 다시 전개.
     func buildSong() -> Song? {
         guard let arrangement else { return nil }
-        let opts = ArrangeOptions(bpm: bpm, minutes: minutes, channels: channels, chordPattern: chordPattern)
+        let opts = ArrangeOptions(bpm: bpm, minutes: minutes, channels: channels, chordPattern: chordPattern, drumPattern: drumPattern)
         return Arranger.build(arrangement, options: opts)
     }
 
@@ -410,7 +422,7 @@ final class AppModel: ObservableObject {
         case .progression:
             return Preview.progression(
                 root: root, scale: scale, prog: Theory.progressions[progressionIndex], complexity: complexity,
-                pattern: chordPattern, channels: channels, options: o, bpm: bpm)
+                pattern: chordPattern, channels: channels, drums: drumPattern, options: o, bpm: bpm)
         }
     }
 

@@ -99,6 +99,8 @@ struct KeyScoreCommands: Commands {
             Button("멜로디 패턴 이전") { m.cycleMelodyStyle(-1) }.shortcut("m", .shift, typing: m.isTyping)
             Button("코드 패턴 다음") { m.cycleChordPattern(1) }.shortcut("a", typing: m.isTyping)
             Button("코드 패턴 이전") { m.cycleChordPattern(-1) }.shortcut("a", .shift, typing: m.isTyping)
+            Button("리듬 패턴 다음") { m.cycleDrumPattern(1) }.shortcut("d", typing: m.isTyping)
+            Button("리듬 패턴 이전") { m.cycleDrumPattern(-1) }.shortcut("d", .shift, typing: m.isTyping)
             Divider()
             Button("곡 길이 짧게") { m.shiftLength(-1) }.shortcut(",", typing: m.isTyping)
             Button("곡 길이 길게") { m.shiftLength(1) }.shortcut(".", typing: m.isTyping)

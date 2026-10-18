@@ -58,6 +58,28 @@ enum ChordPattern: String, CaseIterable, Identifiable {
         }
     }
 
+    /// 곡 생성 프롬프트용 영문 설명: 반주가 어떻게 울리는지와 그 위에 얹을 멜로디의 여백.
+    var promptHint: String {
+        switch self {
+        case .block: return "sustained block chords (open, spacious: the melody can move more)"
+        case .strum: return "quick downward strums on each chord"
+        case .harpRoll: return "slow rolled chords held long (very spacious: the melody can be active)"
+        case .arpUp: return "steady eighth-note arpeggios rising (busy: keep the melody simpler)"
+        case .arpDown: return "steady eighth-note arpeggios falling (busy: keep the melody simpler)"
+        case .arpUpDown: return "steady eighth-note arpeggios rising and falling (busy: keep the melody simpler)"
+        case .alberti: return "Alberti bass figures, classical style (busy: keep the melody simpler)"
+        case .broken: return "relaxed quarter-note broken chords (root, fifth, third, fifth)"
+        case .ballad: return "long bass roots with eighth-note arpeggios above (moderately busy)"
+        case .oomPah: return "oom-pah accompaniment, bass on beats 1 and 3 and chords on beats 2 and 4 (march or country feel)"
+        case .pulse: return "continuous eighth-note chord pulse (busy: use long notes and rests in the melody)"
+        case .popStrum: return "pop/folk strumming rhythm (down, down-up, up-down-up)"
+        case .offbeat: return "short reggae-style chops on the off-beats only (leave space on the beat)"
+        case .stabs: return "syncopated 3+3+2 chord stabs (keep the melody out of the stab rhythm)"
+        case .staccato: return "very short chord hits on beats 1 and 3 (spacious: the melody can be active)"
+        case .tremolo: return "fast sixteenth-note tremolo (very busy: keep the melody long-noted and simple)"
+        }
+    }
+
     /// 4박 패턴 안의 한 번의 타건. idx 가 nil 이면 모든 구성음, 있으면 해당 구성음만(구성음 수로 나머지 처리).
     private struct Hit {
         var at: Double

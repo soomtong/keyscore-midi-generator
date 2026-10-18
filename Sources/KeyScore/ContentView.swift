@@ -261,6 +261,7 @@ struct ContentView: View {
             TextField("분위기 (선택, 예: calm night jazz)", text: $m.mood)
                 .textFieldStyle(.roundedBorder).controlSize(.small)
                 .focused($focus, equals: .mood)
+            rhythmSection
             HStack {
                 Button { m.generate() } label: {
                     if m.isGenerating {
@@ -276,6 +277,33 @@ struct ContentView: View {
                     Button("현재 설정으로 다시 전개") { m.rebuildAndPlay() }
                 }
             }
+        }
+    }
+
+    /// 리듬(드럼) 패턴과 채널. General MIDI 드럼 노트를 보낸다.
+    /// 메뉴/채널 폭을 고정하고 설명은 한 줄로 잘라, 패턴이나 채널을 바꿔도 레이아웃이 흔들리지 않게 한다.
+    private var rhythmSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 6) {
+                Text("RHYTHM").font(.system(size: 10, weight: .bold)).tracking(0.8).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                KeyCap("D", .setting)
+                KeyCap("⇧D", .setting)
+                Text("패턴").font(.caption2).foregroundStyle(.tertiary)
+            }
+            HStack(spacing: 12) {
+                DarkMenu(items: DrumPattern.allCases.map { ($0, $0.rawValue) }, selection: $m.drumPattern, width: 180)
+                    .frame(width: 180)
+                ChannelStepper(title: "CH", channel: $m.rhythmChannel)
+                    .help("리듬 채널 — 설정(⌘,)에서도 바꿀 수 있습니다")
+                Text(m.drumPattern.summary)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+                    .help(m.drumPattern.summary)
+                Spacer(minLength: 0)
+            }
+            Text("General MIDI 드럼 맵 · 보통 16채널 악기는 10번, 8채널 악기는 8번")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
     }
 
@@ -409,14 +437,19 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
-                HStack(spacing: 18) {
-                    Stepper("Melody ch \(m.melodyChannel)", value: $m.melodyChannel, in: 1...16)
-                    Stepper("Chord ch \(m.chordChannel)", value: $m.chordChannel, in: 1...16)
-                    Stepper("Bass ch \(m.bassChannel)", value: $m.bassChannel, in: 1...16)
+                VStack(alignment: .leading, spacing: 6) {
+                    OptionLabel("MIDI CHANNELS")
+                    HStack(spacing: 18) {
+                        ChannelStepper(title: "MELODY", channel: $m.melodyChannel)
+                        ChannelStepper(title: "CHORD", channel: $m.chordChannel)
+                        ChannelStepper(title: "BASS", channel: $m.bassChannel)
+                        ChannelStepper(title: "RHYTHM", channel: $m.rhythmChannel)
+                        Spacer(minLength: 0)
+                    }
+                    Text("가상악기/외장악기의 MIDI 입력 소스에서 \"KeyScore\" 를 선택하고, 멀티팀버(Multi) 모드에서 채널별로 음색을 지정하세요. 리듬 채널에는 General MIDI 드럼 맵을 쓰는 드럼 음색을 지정합니다.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .controlSize(.small)
-                Text("Omnisphere: Settings → MIDI → 입력 소스에서 \"KeyScore\" 를 선택하고, Multi 모드에서 채널별로 패치를 지정하세요.")
-                    .font(.caption).foregroundStyle(.secondary)
                 Text("KeyScore 버전 \(AppInfo.versionString)")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -823,7 +856,7 @@ private struct ShortcutLegend: View {
         ]),
         Group(group: .setting, title: "곡 설정", items: [
             Item(["H L", "← →"], "템포"), Item(["⇧"], "템포 ±5 (누른 채)"), Item(["K J", "↑ ↓"], "Key"), Item(["[ ]"], "Scale"),
-            Item(["1–5"], "복잡도"), Item([", ."], "곡 길이"), Item(["A", "⇧A"], "코드 패턴"), Item(["M", "⇧M"], "멜로디 패턴"),
+            Item(["1–5"], "복잡도"), Item([", ."], "곡 길이"), Item(["A", "⇧A"], "코드 패턴"), Item(["M", "⇧M"], "멜로디 패턴"), Item(["D", "⇧D"], "리듬 패턴"),
         ]),
     ]
 
@@ -954,7 +987,7 @@ private struct MiniStepper: View {
             stepButton("minus", enabled: value > range.lowerBound) { step(-1) }
             Text(value > 0 && range.lowerBound < 0 ? "+\(value)" : "\(value)")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .frame(minWidth: 22)
+                .frame(width: 22)
             stepButton("plus", enabled: value < range.upperBound) { step(1) }
         }
     }
@@ -966,6 +999,16 @@ private struct MiniStepper: View {
             .opacity(enabled ? 1 : 0.3)
             .contentShape(Rectangle())
             .onTapGesture { if enabled { action() } }
+    }
+}
+
+/// MIDI 채널(1~16) 선택. 숫자 폭이 고정되어 9 → 10 으로 바뀌어도 옆 요소가 밀리지 않는다.
+private struct ChannelStepper: View {
+    let title: String
+    @Binding var channel: Int
+
+    var body: some View {
+        MiniStepper(title: title, value: channel, range: 1...16) { channel = min(16, max(1, channel + $0)) }
     }
 }
 

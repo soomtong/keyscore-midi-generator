@@ -152,6 +152,50 @@ final class KeyScoreTests: XCTestCase {
         XCTAssertTrue(prompt.contains("7alt") && prompt.contains("melodic complexity"))
     }
 
+    func testPromptReflectsPatternProgressionAndTempo() {
+        let dorian = Theory.scales.first { $0.name.contains("Dorian") } ?? Theory.scales[0]
+        let ii = Theory.progressions[2]
+        let r = GenerateRequest(root: 2, scale: dorian, bpm: 70, complexity: 2, minutes: 0.5,
+                                melodyStyle: .sparse, chordPattern: .tremolo, progression: ii)
+        let prompt = Generator.prompt(r)
+        XCTAssertTrue(prompt.contains("tremolo"))
+        XCTAssertTrue(prompt.contains("only 1 or 2 notes per bar"))
+        XCTAssertTrue(prompt.contains("slow:"))
+        XCTAssertTrue(prompt.contains("harmonic backbone"))
+        XCTAssertTrue(prompt.contains("2 or 3 sections"))
+        XCTAssertFalse(prompt.contains("Roughly 2 to 5"))
+        XCTAssertEqual(Generator.progressionText(r)?.split(separator: "-").count, 3)
+        // 진행을 고르지 않으면 해당 줄이 없다
+        var none = r
+        none.progression = nil
+        XCTAssertFalse(Generator.prompt(none).contains("harmonic backbone"))
+    }
+
+    func testDrumPatternsUseRhythmChannelAndGMNotes() {
+        XCTAssertTrue(DrumPattern.off.notes(start: 0, beats: 16, channel: 9).isEmpty)
+        for p in DrumPattern.allCases where p != .off {
+            let ev = p.notes(start: 0, beats: 16, channel: 9, crashOnStart: true)
+            XCTAssertFalse(ev.isEmpty, p.rawValue)
+            XCTAssertTrue(ev.allSatisfy { $0.channel == 9 && (35...59).contains($0.pitch) && $0.start >= 0 && $0.start < 16 }, p.rawValue)
+            XCTAssertEqual(ev.filter { $0.pitch == DrumPattern.Kit.crash }.count, 1, p.rawValue)
+        }
+        // 마지막 마디가 잘리면 범위를 넘는 타격이 없어야 한다
+        XCTAssertTrue(DrumPattern.funk.notes(start: 8, beats: 2, channel: 9).allSatisfy { $0.start < 10 })
+    }
+
+    func testArrangerSendsDrumsOnlyWhenEnabled() {
+        let sec = SectionSpec(name: "A", bars: 4, chords: [ChordSpec(root: 0, quality: Theory.chordQualities[0], beats: 4)],
+                              melody: [MelodyNote(beat: 0, pitch: 60, length: 1)])
+        let arr = Arrangement(title: "t", sections: ["A": sec], form: ["A"])
+        var o = ArrangeOptions(bpm: 120, minutes: 0.5)
+        o.channels.rhythm = 8
+        XCTAssertFalse(Arranger.build(arr, options: o).events.contains { $0.channel == 7 })
+        o.drumPattern = .rock
+        let ev = Arranger.build(arr, options: o).events
+        XCTAssertTrue(ev.contains { $0.channel == 7 && $0.pitch == DrumPattern.Kit.kick })
+        XCTAssertTrue(ev.contains { $0.channel == 0 })  // 멜로디는 그대로 1번 채널
+    }
+
     func testSelectionShiftWrapsAround() async {
         let m = await AppModel()
         await MainActor.run {

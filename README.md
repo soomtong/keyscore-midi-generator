@@ -1,6 +1,6 @@
 # KeyScore MIDI Generator
 
-macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMIDI 가상 소스 "KeyScore" 로 Omnisphere 등 가상악기에 송신한다.
+macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMIDI 가상 소스 "KeyScore" 로 가상악기/외장악기에 송신한다.
 
 ## 실행
     swift run KeyScore            # 개발용
@@ -8,7 +8,7 @@ macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMI
 
 - API key: 환경변수 OPENROUTER_API_KEY 또는 설정(⌘,)에서 입력(Keychain 저장).
 - 모델: 설정에서 저가 모델 프리셋(Claude Haiku 5.5, GPT-6 Luna, DeepSeek, GLM, Qwen)을 고르거나 ID 를 직접 입력. 환경변수 OPENROUTER_MODEL 이 있으면 우선.
-- Omnisphere: Settings → MIDI 입력에서 "KeyScore" 선택. 기본 채널은 Melody 1, Chord 2, Bass 3 (설정에서 1~16 변경).
+- 가상악기/외장악기: MIDI 입력 소스에서 "KeyScore" 선택. 기본 채널은 Melody 1, Chord 2, Bass 3, Rhythm 10 (설정에서 1~16 변경, Rhythm 은 곡 생성 탭에서도 변경).
 - 상단 디스플레이 아이콘: MIDI 출력(노트가 나갈 때 깜빡임), 서스테인 페달, 자동 재생, API key 상태. 마우스를 올리면 설명이 나온다.
 
 ## 구조

@@ -118,7 +118,8 @@ enum Preview {
     }
 
     static func progression(root: Int, scale: ScaleType, prog: Theory.Progression, complexity: Int, pattern: ChordPattern,
-                            channels: ChannelMap, options o: ListenOptions = ListenOptions(), bpm: Double = 90) -> Song {
+                            channels: ChannelMap, drums: DrumPattern = .off,
+                            options o: ListenOptions = ListenOptions(), bpm: Double = 90) -> Song {
         var events: [NoteEvent] = []
         var t = 0.0
         for d in prog.degrees {
@@ -131,6 +132,7 @@ enum Preview {
             events.append(NoteEvent(channel: UInt8(channels.bass - 1), pitch: c.bassNote + 12 * o.octave, velocity: 90, start: t, length: 3.8))
             t += 4
         }
+        events += drums.notes(start: 0, beats: t, channel: UInt8(channels.rhythm - 1))
         return Song(title: prog.name, bpm: bpm, events: events.filter { (0...127).contains($0.pitch) }, totalBeats: t)
     }
 }

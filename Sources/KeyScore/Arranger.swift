@@ -23,6 +23,7 @@ struct ChannelMap {
     var melody = 1
     var chords = 2
     var bass = 3
+    var rhythm = 10  // 드럼. 16채널 악기는 보통 10번, 8채널 악기는 8번
 }
 
 struct ArrangeOptions {
@@ -30,6 +31,7 @@ struct ArrangeOptions {
     var minutes: Double
     var channels = ChannelMap()
     var chordPattern: ChordPattern = .block
+    var drumPattern: DrumPattern = .off
     var beatsPerBar = 4
 }
 
@@ -62,7 +64,7 @@ enum Arranger {
         let bpb = Double(o.beatsPerBar)
         let targetBars = targetBars(minutes: o.minutes, bpm: o.bpm, beatsPerBar: o.beatsPerBar)
         let order = expandForm(arr.form, sections: arr.sections, targetBars: targetBars)
-        let ch = ChannelMap(melody: o.channels.melody, chords: o.channels.chords, bass: o.channels.bass)
+        let ch = o.channels
         var events: [NoteEvent] = []
         var cursor = 0.0
         var seen: [String: Int] = [:]
@@ -95,6 +97,9 @@ enum Arranger {
                     i += 1
                 }
             }
+
+            // 리듬: 섹션이 바뀔 때 크래시
+            events += o.drumPattern.notes(start: cursor, beats: secBeats, channel: UInt8(ch.rhythm - 1), crashOnStart: true)
 
             // 멜로디: 반복될수록 약간 세게
             for n in sec.melody where n.beat >= 0 && n.beat < secBeats {
