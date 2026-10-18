@@ -7,6 +7,7 @@ struct GenerateRequest {
     var complexity: Int
     var minutes: Double
     var mood: String = ""
+    var melodyStyle: MelodyStyle = .free
 }
 
 enum Generator {
@@ -18,14 +19,27 @@ enum Generator {
     static func prompt(_ r: GenerateRequest) -> String {
         let scaleNotes = r.scale.intervals.map { noteNames[(r.root + $0) % 12] }.joined(separator: " ")
         let qualities = Theory.chordQualities.filter { $0.complexity <= r.complexity }.map(\.symbol).joined(separator: ", ")
-        let complexityText = ["", "triads only", "triads and seventh chords", "seventh, ninth, sus and add chords"][r.complexity]
+        let complexityText = [
+            "", "triads only", "triads and seventh chords", "seventh, ninth, sus and add chords",
+            "also 11th, 13th, 6/9 and maj7#11 colour chords",
+            "also altered dominants (7b9, 7#9, 7#11, 7b13, 7alt), mMaj7 and quartal chords",
+        ][r.complexity]
+        let melodicText = [
+            "", "simple, mostly stepwise, built from chord tones",
+            "chord tones mixed with scale passing tones",
+            "include 9ths and suspensions resolving to chord tones",
+            "use 11th/13th tensions, chromatic approach notes and syncopated phrasing",
+            "use altered tensions, chromatic enclosures, wide leaps and rhythmic displacement",
+        ][r.complexity]
         return """
         Compose a piece with these constraints:
         - key: \(noteNames[r.root]), scale: \(r.scale.name) (notes: \(scaleNotes))
         - tempo: \(Int(r.bpm)) BPM, 4/4
-        - chord complexity \(r.complexity)/3: \(complexityText)
+        - chord complexity \(r.complexity)/\(Theory.maxComplexity): \(complexityText)
+        - melodic complexity: \(melodicText)
         - total length about \(Int(r.minutes)) minutes (the host will repeat the form; do not write the full length)
         \(r.mood.isEmpty ? "" : "- mood: \(r.mood)")
+        \(r.melodyStyle == .free ? "" : "- melody style (\(r.melodyStyle.rawValue)): \(r.melodyStyle.promptHint)")
 
         JSON schema:
         {

@@ -23,10 +23,14 @@ final class MidiPlayer: @unchecked Sendable {
     private var active = Set<UInt16>()
     private var usedChannels = Set<UInt8>()
     private var lastProgress = 0.0
+    private var pedal = false
+    private var sentNote = false
 
     /// 메인 스레드가 아닌 곳에서 호출됨.
     var onProgress: (@Sendable (Double) -> Void)?
     var onStop: (@Sendable () -> Void)?
+    /// Note On 을 보낼 때마다 호출 (표시등용)
+    var onActivity: (@Sendable () -> Void)?
 
     init() {
         MIDIClientCreate("KeyScore" as CFString, nil, nil, &client)
@@ -63,12 +67,21 @@ final class MidiPlayer: @unchecked Sendable {
             self.loop = loop
             index = 0
             lastProgress = 0
+            if pedal { for ch in chans { sendRaw(0xB0 | ch, 64, 127) } }  // 페달을 밟은 채로 시작
             startNanos = DispatchTime.now().uptimeNanoseconds
             let t = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
             t.schedule(deadline: .now(), repeating: .milliseconds(1), leeway: .microseconds(100))
             t.setEventHandler { [weak self] in self?.tick() }
             timer = t
             t.resume()
+        }
+    }
+
+    /// 서스테인 페달(CC64). 재생 중이면 즉시 보내고, 재생 전이면 다음 재생 시작 때 적용한다.
+    func setPedal(_ down: Bool) {
+        queue.async { [self] in
+            pedal = down
+            for ch in usedChannels { sendRaw(0xB0 | ch, 64, down ? 127 : 0) }
         }
     }
 
@@ -82,10 +95,12 @@ final class MidiPlayer: @unchecked Sendable {
 
     private func tick() {
         var now = Double(DispatchTime.now().uptimeNanoseconds - startNanos) / 1e9
+        sentNote = false
         while index < messages.count, messages[index].time <= now {
             send(messages[index])
             index += 1
         }
+        if sentNote { onActivity?() }
         if now - lastProgress >= 0.05 {
             lastProgress = now
             onProgress?(min(now, endSeconds))
@@ -106,6 +121,7 @@ final class MidiPlayer: @unchecked Sendable {
         guard let t = timer else { return }
         t.cancel()
         timer = nil
+        for ch in usedChannels { sendRaw(0xB0 | ch, 64, 0) }  // 페달을 먼저 떼야 울리던 음이 끊긴다
         for key in active {
             sendRaw(0x80 | UInt8(key >> 8), UInt8(key & 0xFF), 0)
         }
@@ -116,7 +132,12 @@ final class MidiPlayer: @unchecked Sendable {
 
     private func send(_ m: Message) {
         let key = UInt16(m.status & 0x0F) << 8 | UInt16(m.d1)
-        if m.status & 0xF0 == 0x90 { active.insert(key) } else { active.remove(key) }
+        if m.status & 0xF0 == 0x90 {
+            active.insert(key)
+            sentNote = true
+        } else {
+            active.remove(key)
+        }
         sendRaw(m.status, m.d1, m.d2)
     }
 

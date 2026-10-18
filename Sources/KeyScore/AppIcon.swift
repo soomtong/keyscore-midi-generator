@@ -8,25 +8,33 @@ enum AppIcon {
         (5.0, 3.5 + 0, 1.5), (3.5, 4, 1), (5.8, 4.5, 1.3), (0.5, 5, 1.5), (4.5, 5.5, 1),
     ]
 
-    static func image(size: CGFloat) -> NSImage {
+    /// flat: 여백과 그림자 없이 본체만 꽉 채워 그린다 (앱 내부 헤더용).
+    static func image(size: CGFloat, flat: Bool = false) -> NSImage {
         NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            draw(in: rect)
+            draw(in: rect, flat: flat)
             return true
         }
     }
 
-    static func draw(in rect: CGRect) {
+    static func draw(in rect: CGRect, flat: Bool = false) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let s = rect.width / 1024
         ctx.saveGState()
         ctx.scaleBy(x: s, y: s)
+        if flat {  // 824 본체가 1024 캔버스를 채우도록 확대
+            ctx.translateBy(x: 512, y: 512)
+            ctx.scaleBy(x: 1024.0 / 824, y: 1024.0 / 824)
+            ctx.translateBy(x: -512, y: -512)
+        }
 
         // macOS 아이콘 본체: 1024 캔버스 안의 824 라운드 사각형
         let body = CGRect(x: 100, y: 100, width: 824, height: 824)
         let path = CGPath(roundedRect: body, cornerWidth: 186, cornerHeight: 186, transform: nil)
 
         ctx.saveGState()
-        ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 28, color: NSColor.black.withAlphaComponent(0.35).cgColor)
+        if !flat {
+            ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 28, color: NSColor.black.withAlphaComponent(0.35).cgColor)
+        }
         ctx.addPath(path)
         ctx.setFillColor(NSColor(red: 0.10, green: 0.07, blue: 0.25, alpha: 1).cgColor)
         ctx.fillPath()

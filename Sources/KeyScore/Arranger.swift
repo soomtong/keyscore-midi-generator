@@ -54,9 +54,13 @@ enum Arranger {
         return out
     }
 
+    static func targetBars(minutes: Double, bpm: Double, beatsPerBar: Int = 4) -> Int {
+        max(1, Int((minutes * bpm / Double(beatsPerBar)).rounded()))
+    }
+
     static func build(_ arr: Arrangement, options o: ArrangeOptions) -> Song {
         let bpb = Double(o.beatsPerBar)
-        let targetBars = max(1, Int((o.minutes * o.bpm / bpb).rounded()))
+        let targetBars = targetBars(minutes: o.minutes, bpm: o.bpm, beatsPerBar: o.beatsPerBar)
         let order = expandForm(arr.form, sections: arr.sections, targetBars: targetBars)
         let ch = ChannelMap(melody: o.channels.melody, chords: o.channels.chords, bass: o.channels.bass)
         var events: [NoteEvent] = []
@@ -103,41 +107,5 @@ enum Arranger {
             cursor += secBeats
         }
         return Song(title: arr.title, bpm: o.bpm, events: events, totalBeats: cursor)
-    }
-}
-
-enum Preview {
-    static func scale(root: Int, type: ScaleType, channel: Int) -> Song {
-        let base = 60 + root - (root > 6 ? 12 : 0)
-        var pitches = type.intervals.map { base + $0 } + [base + 12]
-        pitches += pitches.dropLast().reversed()
-        let events = pitches.enumerated().map { i, p in
-            NoteEvent(channel: UInt8(channel - 1), pitch: p, velocity: 90, start: Double(i) * 0.5, length: 0.45)
-        }
-        return Song(title: "\(noteNames[root]) \(type.name)", bpm: 100, events: events, totalBeats: Double(pitches.count) * 0.5 + 0.5)
-    }
-
-    static func chord(root: Int, quality: ChordQuality, pattern: ChordPattern, channel: Int) -> Song {
-        let c = ChordSpec(root: root, quality: quality, beats: 4)
-        // 블록 한 번 + 지정 패턴 한 번
-        var events = ChordPattern.block.notes(pitches: c.voicing, start: 0, beats: 4, channel: UInt8(channel - 1), velocity: 80)
-        events += pattern.notes(pitches: c.voicing, start: 4, beats: 4, channel: UInt8(channel - 1), velocity: 80)
-        return Song(title: c.symbol, bpm: 100, events: events, totalBeats: 8)
-    }
-
-    static func progression(root: Int, scale: ScaleType, prog: Theory.Progression, complexity: Int,
-                            pattern: ChordPattern, channels: ChannelMap) -> Song {
-        var events: [NoteEvent] = []
-        var t = 0.0
-        for d in prog.degrees {
-            let ivs = Theory.diatonicIntervals(scale: scale, degree: d, complexity: complexity)
-            let pc = (root + scale.intervals[d % scale.intervals.count]) % 12
-            let q = Theory.quality(matching: ivs) ?? ChordQuality(symbol: "", intervals: ivs, complexity: complexity)
-            let c = ChordSpec(root: pc, quality: q, beats: 4)
-            events += pattern.notes(pitches: c.voicing, start: t, beats: 4, channel: UInt8(channels.chords - 1), velocity: 75)
-            events.append(NoteEvent(channel: UInt8(channels.bass - 1), pitch: c.bassNote, velocity: 90, start: t, length: 3.8))
-            t += 4
-        }
-        return Song(title: prog.name, bpm: 90, events: events, totalBeats: t)
     }
 }

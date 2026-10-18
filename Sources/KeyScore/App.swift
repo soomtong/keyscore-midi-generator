@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct KeyScoreApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var model = AppModel()
 
     init() {
         let args = CommandLine.arguments
@@ -28,7 +29,9 @@ struct KeyScoreApp: App {
 
     var body: some Scene {
         WindowGroup("KeyScore") {
-            ContentView()
+            ContentView(m: model)
         }
+        .defaultSize(width: 720, height: 960)
+        .commands { KeyScoreCommands(m: model) }
     }
 }

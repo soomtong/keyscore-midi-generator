@@ -23,7 +23,7 @@ struct ScaleType: Identifiable, Hashable {
 struct ChordQuality: Identifiable, Hashable {
     let symbol: String
     let intervals: [Int]
-    /// 1 = triad, 2 = seventh, 3 = extended / suspended
+    /// 1 = triad, 2 = seventh, 3 = 9th / suspended, 4 = 11th / 13th, 5 = altered / jazz
     let complexity: Int
     var id: String { symbol }
 }
@@ -63,7 +63,25 @@ enum Theory {
         ChordQuality(symbol: "maj9", intervals: [0, 4, 7, 11, 14], complexity: 3),
         ChordQuality(symbol: "min9", intervals: [0, 3, 7, 10, 14], complexity: 3),
         ChordQuality(symbol: "9", intervals: [0, 4, 7, 10, 14], complexity: 3),
+        // 4: 11th / 13th 계열
+        ChordQuality(symbol: "11", intervals: [0, 4, 7, 10, 14, 17], complexity: 4),
+        ChordQuality(symbol: "min11", intervals: [0, 3, 7, 10, 14, 17], complexity: 4),
+        ChordQuality(symbol: "13", intervals: [0, 4, 7, 10, 14, 21], complexity: 4),
+        ChordQuality(symbol: "maj13", intervals: [0, 4, 7, 11, 14, 21], complexity: 4),
+        ChordQuality(symbol: "6/9", intervals: [0, 4, 7, 9, 14], complexity: 4),
+        ChordQuality(symbol: "maj7#11", intervals: [0, 4, 7, 11, 18], complexity: 4),
+        // 5: 얼터드 / 재즈 색채
+        ChordQuality(symbol: "7b9", intervals: [0, 4, 7, 10, 13], complexity: 5),
+        ChordQuality(symbol: "7#9", intervals: [0, 4, 7, 10, 15], complexity: 5),
+        ChordQuality(symbol: "7#11", intervals: [0, 4, 7, 10, 18], complexity: 5),
+        ChordQuality(symbol: "7b13", intervals: [0, 4, 7, 10, 20], complexity: 5),
+        ChordQuality(symbol: "7alt", intervals: [0, 4, 6, 10, 13, 15], complexity: 5),
+        ChordQuality(symbol: "mMaj7", intervals: [0, 3, 7, 11], complexity: 5),
+        ChordQuality(symbol: "quartal", intervals: [0, 5, 10, 15], complexity: 5),
     ]
+
+    static let complexityNames = ["", "Triad", "7th", "9th/sus", "11th/13th", "Altered"]
+    static let maxComplexity = 5
 
     private static let aliases: [String: String] = [
         "": "maj", "major": "maj", "m": "min", "minor": "min", "-": "min",
@@ -71,6 +89,8 @@ enum Theory {
         "M7": "maj7", "major7": "maj7", "ø": "m7b5", "min7b5": "m7b5", "°7": "dim7",
         "m9": "min9", "dom9": "9", "major9": "maj9", "suspended4": "sus4", "suspended2": "sus2",
         "min6": "min", "m6": "min",
+        "m11": "min11", "dom11": "11", "dom13": "13", "major13": "maj13", "69": "6/9", "maj7#11": "maj7#11",
+        "alt": "7alt", "m(maj7)": "mMaj7", "minmaj7": "mMaj7", "mmaj7": "mMaj7", "7#9": "7#9",
     ]
 
     static func quality(named raw: String) -> ChordQuality? {
@@ -89,7 +109,7 @@ enum Theory {
     /// 스케일 위에 3도씩 쌓은 다이아토닉 코드의 root 이후 상대 음정들.
     static func diatonicIntervals(scale: ScaleType, degree: Int, complexity: Int) -> [Int] {
         let n = scale.intervals.count
-        let count = complexity <= 1 ? 3 : (complexity == 2 ? 4 : 5)
+        let count = min(7, max(1, complexity) + 2)  // 3화음, 7th, 9th, 11th, 13th
         let base = scale.intervals[degree % n]
         return (0..<count).map { k in
             let idx = degree + 2 * k
