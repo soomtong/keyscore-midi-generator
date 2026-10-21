@@ -211,7 +211,11 @@ final class AppModel {
 
     func stop() { player.stop() }
 
-    func replay() { if let song { play(song, arrangement: playingArrangement) } }
+    /// 마지막으로 튼 것을 현재 설정으로 다시 만들어 처음부터 튼다. 다시 만들 수 없으면 마지막 곡을 그대로 튼다.
+    func replay() {
+        let rebuilt = playingArrangement ? buildSong() : lastPreview.flatMap(buildPreview)
+        if let s = rebuilt ?? song { play(s, arrangement: playingArrangement) }
+    }
 
     func togglePlayback() {
         if isPlaying { stop() } else { replay() }
