@@ -153,7 +153,7 @@ final class AppModel {
         listenOptions.varyMelody = Bool.random()
         var summary = "\(noteNames[root]) \(scale.name), \(Int(bpm)) BPM, 복잡도 \(complexity), \(melodyStyle.rawValue), \(chordPattern.rawValue)"
         if includeListenOptions {
-            // 스케일/코드 순차 청취용. 너무 빠르거나 느린 값(rate 2)은 뺀다.
+            // 코드 순차 청취용. 너무 빠르거나 느린 값(rate 2)은 뺀다.
             let rate = ListenOptions.rates.filter { $0 <= 1 }.randomElement()!
             listenOptions.rate = rate
             // Auto 를 절반 확률로 두고, 나머지는 rate 이하의 길이로 제한
@@ -291,7 +291,7 @@ final class AppModel {
 
     func cycleChordPattern(_ d: Int = 1) {
         chordPattern = chordPattern.cycled(by: d)
-        status = "코드 패턴: \(chordPattern.rawValue)"
+        status = "패턴: \(chordPattern.rawValue)"
     }
 
     func cycleMelodyStyle(_ d: Int = 1) {
@@ -528,7 +528,7 @@ final class AppModel {
         let o = listenOptions
         switch kind {
         case .scale:
-            return Preview.scale(root: root, type: scale, channel: melodyChannel, options: o, bpm: bpm)
+            return Preview.scale(root: root, type: scale, channel: melodyChannel, octave: o.octave, bpm: bpm)
         case .melody:
             guard melodyStyle != .free else { return nil }
             return Preview.melody(root: root, scale: scale, style: melodyStyle, channel: melodyChannel, options: o, bpm: bpm)

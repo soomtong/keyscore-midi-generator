@@ -85,9 +85,7 @@ final class MidiPlayerTests: XCTestCase {
         player.setPedal(true)  // 재생 전에 밟아 둠
         Thread.sleep(forTimeInterval: 0.1)
 
-        var o = ListenOptions()
-        o.upDown = false
-        let song = Preview.scale(root: 0, type: Theory.scales[0], channel: 1, options: o)
+        let song = Preview.scale(root: 0, type: Theory.scales[0], channel: 1)
         player.play(song, loop: false)
         Thread.sleep(forTimeInterval: 0.3)
         let pedals = rx.messages.filter { $0.status == 0xB0 && $0.d1 == 64 }
@@ -210,17 +208,18 @@ final class ListenOptionsEndToEndTests: XCTestCase {
     }
 
     @MainActor
-    func testScaleOptionsReachMIDI() async throws {
+    func testScaleIgnoresSequenceOptions() async throws {
         let asc: [UInt8] = [60, 62, 64, 65, 67, 69, 71, 72]
+        let upDown = asc + asc.reversed().dropFirst()
         let plain = try await notesPlayed { _ in }
-        XCTAssertEqual(plain, asc)  // 기본값은 오름차순만, 중복 재생 없음
-        let desc = try await notesPlayed { $0.listenOptions.descending = true }
-        XCTAssertEqual(desc, Array(asc.reversed()))
-        let upDown = try await notesPlayed { $0.listenOptions.upDown = true }
-        XCTAssertEqual(upDown, asc + Array(asc.reversed().dropFirst()))
-        let two = try await notesPlayed { $0.listenOptions.twoOctaves = true }
-        XCTAssertEqual(two.count, 15)
-        XCTAssertEqual(two.last, 84)
+        XCTAssertEqual(plain, upDown)  // 올라갔다 내려옴, 꼭대기 음은 한 번만
+        let opts = try await notesPlayed {
+            $0.listenOptions.together = true
+            $0.listenOptions.descending = true
+            $0.listenOptions.upDown = true
+            $0.listenOptions.twoOctaves = true
+        }
+        XCTAssertEqual(opts, upDown)
     }
 
     @MainActor

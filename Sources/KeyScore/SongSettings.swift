@@ -18,7 +18,7 @@ struct ArrangeSettings: Equatable {
 
     /// old 와 달라진 항목 이름
     func changes(from old: Self) -> [String] {
-        [("BPM", bpm != old.bpm), ("길이", minutes != old.minutes), ("코드 패턴", chordPattern != old.chordPattern),
+        [("BPM", bpm != old.bpm), ("길이", minutes != old.minutes), ("패턴", chordPattern != old.chordPattern),
          ("리듬", drumPattern != old.drumPattern), ("Second Part", secondPart != old.secondPart), ("채널", channels != old.channels)]
             .filter(\.1).map(\.0)
     }

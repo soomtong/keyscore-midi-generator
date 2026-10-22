@@ -46,11 +46,30 @@ Swift 6 언어 모드(swift-tools-version 6.0), macOS 14 이상. 동시성 설�
 | Scale 이전/다음 | [ / ] |
 | 복잡도 (Triad · 7th · 9th/sus · 11th/13th · Altered) | 1 – 5 |
 | 곡 길이 | , / . |
-| 코드 패턴 다음 / 이전 | A / ⇧A |
+| 패턴 다음 / 이전 | A / ⇧A |
 | 멜로디 패턴 다음 / 이전 | M / ⇧M |
 
-청취 옵션(kornflake 의 Audition 옵션 차용): Sequential/Together(⌘3), Descending(⌘D), Up & down(⇧⌘D), 2 Octaves(⌥⌘D),
-Legato(⌥G), 코드 위/아래 확장(⌘U/⇧⌘U, ⌘B/⇧⌘B), 옥타브(⌥⌘↑/↓), 음 길이(⌘=/⌘-), 진행 간격(Rate), 자동 재생(⌥A).
+## 청취 옵션
+kornflake 의 Audition 옵션을 차용했다. 옵션마다 적용되는 듣기가 달라 청취 탭에서도 적용 대상별로 묶어 두었다.
+스케일 듣기는 옵션과 무관하게 한 옥타브를 1/8 순차로 올라갔다 내려온다 (꼭대기 음은 한 번만). 옥타브만 따른다.
+
+| 옵션 | 키 | 스케일 S | 코드 C | 패턴 F | 멜로디 G |
+|---|---|:-:|:-:|:-:|:-:|
+| Sequential / Together | ⌘3 | | ✓ | | |
+| Descending | ⌘D | | ✓ | | |
+| Up & down | ⇧⌘D | | ✓ | | |
+| 2 Octaves | ⌥⌘D | | ✓ | | |
+| Rate (진행 간격) | | | ✓ | | |
+| Note Length (음 길이) | ⌘= / ⌘- | | ✓ | | |
+| Legato | ⌥G | | ✓ | | |
+| Extend ▲ / ▼ (코드 위/아래 확장) | ⌘U / ⇧⌘U, ⌘B / ⇧⌘B | | ✓ | ✓ | |
+| Octave | ⌥⌘↑ / ↓ | ✓ | ✓ | ✓ | ✓ |
+| Vary melody (들을 때마다 변주) | ⌥V | | | | ✓ |
+| Pedal (서스테인) | Tab · ⌥P | ✓ | ✓ | ✓ | ✓ |
+| Auto replay (값을 바꾸면 다시 재생) | ⌥A | ✓ | ✓ | ✓ | ✓ |
+
+- Descending · Up & down · 2 Octaves · Rate · Legato 는 Sequential 에만 적용된다. Together 는 구성음을 한 번에 누른다.
+- 패턴 듣기는 이 밖에 복잡도(1–5), 패턴(A / ⇧A), 코드 진행(⇧F)을 따른다. 멜로디 듣기는 멜로디 패턴(M / ⇧M)을 따른다.
 
 ## 테스트
     swift test

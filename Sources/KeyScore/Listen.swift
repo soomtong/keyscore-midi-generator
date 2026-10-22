@@ -1,6 +1,6 @@
 import Foundation
 
-/// 스케일/코드 청취 옵션. kornflake 의 Audition 옵션(순차/동시, 내림차순, 오르내리기, 2옥타브,
+/// 청취 옵션. kornflake 의 Audition 옵션(순차/동시, 내림차순, 오르내리기, 2옥타브,
 /// 코드 확장, 진행 간격, 음 길이, 레가토, 옥타브)을 차용했다.
 struct ListenOptions: Equatable {
     var together = false  // false: Sequential, true: Together
@@ -77,13 +77,11 @@ enum Preview {
         return clamp(seq)
     }
 
-    static func scalePitches(root: Int, type: ScaleType, options o: ListenOptions) -> [Int] {
-        let base = 60 + root - (root > 6 ? 12 : 0) + 12 * o.octave
-        let octaves = o.twoOctaves ? 2 : 1
-        var asc: [Int] = []
-        for oct in 0..<octaves { asc += type.intervals.map { base + 12 * oct + $0 } }
-        asc.append(base + 12 * octaves)
-        return order(asc, o)
+    /// 스케일은 한 옥타브를 올라갔다가 다시 내려온다 (꼭대기 음은 한 번만). 청취 옵션 중 옥타브만 따른다.
+    static func scalePitches(root: Int, type: ScaleType, octave: Int = 0) -> [Int] {
+        let base = 60 + root - (root > 6 ? 12 : 0) + 12 * octave
+        let asc = type.intervals.map { base + $0 } + [base + 12]
+        return clamp(asc + asc.reversed().dropFirst())
     }
 
     /// 코드 순차 재생 음 목록: 구성음(옥타브/확장 적용)을 2옥타브, 내림차순, 오르내리기 옵션에 따라 늘어놓는다.
@@ -93,8 +91,9 @@ enum Preview {
         return order(asc, o)
     }
 
-    static func scale(root: Int, type: ScaleType, channel: Int, options o: ListenOptions = ListenOptions(), bpm: Double = 100) -> Song {
-        let (events, beats) = play(scalePitches(root: root, type: type, options: o), channel: channel, o: o, bpm: bpm)
+    /// 스케일 듣기: 순서·간격·음 길이는 기본값(1/8 순차)으로 고정한다.
+    static func scale(root: Int, type: ScaleType, channel: Int, octave: Int = 0, bpm: Double = 100) -> Song {
+        let (events, beats) = play(scalePitches(root: root, type: type, octave: octave), channel: channel, o: ListenOptions(), bpm: bpm)
         return Song(title: "\(noteNames[root]) \(type.name)", bpm: bpm, events: events, totalBeats: beats)
     }
 

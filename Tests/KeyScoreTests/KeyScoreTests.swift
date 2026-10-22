@@ -192,28 +192,23 @@ final class KeyScoreTests: XCTestCase {
 
     // MARK: 청취 옵션
 
-    func testScaleSequenceOptions() {
+    func testScaleGoesUpAndDownOneOctave() {
         let major = Theory.scales[0]
+        XCTAssertEqual(Preview.scalePitches(root: 0, type: major),
+                       [60, 62, 64, 65, 67, 69, 71, 72, 71, 69, 67, 65, 64, 62, 60])
+        XCTAssertEqual(Preview.scalePitches(root: 0, type: major, octave: 1).first, 72)
+        let song = Preview.scale(root: 0, type: major, channel: 1)
+        XCTAssertEqual(song.events.map(\.start), (0..<15).map { Double($0) * 0.5 })  // 1/8 순차
+    }
+
+    func testSequenceOrderOptions() {
         var o = ListenOptions()
-        o.upDown = false
-        XCTAssertEqual(Preview.scalePitches(root: 0, type: major, options: o), [60, 62, 64, 65, 67, 69, 71, 72])
-
+        let asc = [60, 64, 67, 72]
         o.descending = true
-        XCTAssertEqual(Preview.scalePitches(root: 0, type: major, options: o), [72, 71, 69, 67, 65, 64, 62, 60])
-
+        XCTAssertEqual(Preview.order(asc, o), [72, 67, 64, 60])
         o.descending = false
         o.upDown = true  // 꼭대기 음은 한 번만
-        let ud = Preview.scalePitches(root: 0, type: major, options: o)
-        XCTAssertEqual(ud.count, 15)
-        XCTAssertEqual(ud.filter { $0 == 72 }.count, 1)
-
-        o.upDown = false
-        o.twoOctaves = true
-        XCTAssertEqual(Preview.scalePitches(root: 0, type: major, options: o).last, 84)
-
-        o.twoOctaves = false
-        o.octave = 1
-        XCTAssertEqual(Preview.scalePitches(root: 0, type: major, options: o).first, 72)
+        XCTAssertEqual(Preview.order(asc, o), [60, 64, 67, 72, 67, 64, 60])
     }
 
     func testChordExtendContinuesPattern() {
@@ -232,14 +227,14 @@ final class KeyScoreTests: XCTestCase {
     func testLegatoOverlapsAndTogetherStacks() {
         var o = ListenOptions()
         o.legato = true
-        let seq = Preview.scale(root: 0, type: Theory.scales[0], channel: 1, options: o, bpm: 120)
+        let seq = Preview.chord(root: 0, quality: Theory.chordQualities[0], channel: 1, options: o, bpm: 120)
         let first = seq.events[0], second = seq.events[1]
         XCTAssertGreaterThan(first.start + first.length, second.start)  // 다음 음 시작 뒤에도 울림
         XCTAssertEqual((first.start + first.length - second.start) * 60 / 120, ListenOptions.legatoOverlapSeconds, accuracy: 1e-9)
 
         o.legato = false
         o.together = true
-        let block = Preview.scale(root: 0, type: Theory.scales[0], channel: 1, options: o)
+        let block = Preview.chord(root: 0, quality: Theory.chordQualities[0], channel: 1, options: o)
         XCTAssertTrue(block.events.allSatisfy { $0.start == 0 })
     }
 

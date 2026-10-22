@@ -167,7 +167,7 @@ struct ContentView: View {
     }
 
     private var chordPatternCard: some View {
-        Card(title: "코드 패턴", trailing: {
+        Card(title: "PATTERNS", trailing: {
             // 패턴 듣기는 청취 탭의 "패턴 듣기" 줄(F)이 담당한다. 여기에는 단축키 정보만 둔다.
             HStack(spacing: 6) {
                 KeyCap("F", .listen)
@@ -361,6 +361,8 @@ struct ContentView: View {
                 DarkMenu(items: MelodyStyle.allCases.map { ($0, $0.rawValue) }, selection: $m.melodyStyle, width: 150)
                 KeyCap("M", .setting)
                 KeyCap("⇧M", .setting)
+                OptionChip("Vary", key: "⌥V", isOn: $m.listenOptions.varyMelody)
+                    .help("멜로디 변주 (들을 때마다 다르게)")
             }
             listenRow(title: "코드", detail: nil, key: "C") {
                 m.listen(.chord)
@@ -399,12 +401,14 @@ struct ContentView: View {
         }
     }
 
-    /// kornflake 의 Audition 옵션을 차용: 순차/동시, 내림차순, 오르내리기, 2옥타브, 코드 확장, 진행 간격, 음 길이, 레가토, 옥타브
+    /// kornflake 의 Audition 옵션을 차용: 순차/동시, 내림차순, 오르내리기, 2옥타브, 코드 확장, 진행 간격, 음 길이, 레가토, 옥타브.
+    /// 옵션마다 적용되는 듣기가 달라 적용 대상별로 묶는다 (Preview 참고). 스케일 듣기는 옥타브만 따른다.
     private var listenOptionsPanel: some View {
         let together = m.listenOptions.together
         return VStack(alignment: .leading, spacing: 10) {
             Divider().overlay(Theme.stroke)
-            OptionLabel("MODE")
+            // 코드 듣기 전용: 구성음을 늘어놓는 방식. 스케일은 오름차순 순차로 고정이라 받지 않는다
+            optionSection(title: "CHORD", keys: ["C"])
             HStack(spacing: 6) {
                 ToggleGroup(items: [(false, "Sequential"), (true, "Together")], badges: ["", "⌘3"], badgeGroup: .listen,
                             selection: $m.listenOptions.together)
@@ -416,8 +420,6 @@ struct ContentView: View {
                 }
                 .opacity(together ? 0.35 : 1)
             }
-            Text("Descending · Up & down · 2 Octaves 는 스케일/코드 순차(Sequential) 재생에 적용됩니다. Together, 진행, 멜로디에는 적용되지 않습니다.")
-                .font(.caption2).foregroundStyle(.tertiary)
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
                     OptionLabel("RATE")
@@ -430,18 +432,42 @@ struct ContentView: View {
                     ToggleGroup(items: ListenOptions.lengths.map { ($0, ListenOptions.label(beats: $0)) }, selection: $m.listenOptions.noteLength)
                 }
             }
-            HStack(spacing: 18) {
-                MiniStepper(title: "EXTEND ▲", value: m.listenOptions.extendUp, range: 0...ListenOptions.maxExtend) { m.shiftExtendUp($0) }
-                MiniStepper(title: "EXTEND ▼", value: m.listenOptions.extendDown, range: 0...ListenOptions.maxExtend) { m.shiftExtendDown($0) }
-                MiniStepper(title: "OCTAVE", value: m.listenOptions.octave, range: -2...2) { m.shiftOctave($0) }
-                Spacer()
-            }
             HStack(spacing: 6) {
                 OptionChip("Legato", key: "⌥G", isOn: $m.listenOptions.legato).opacity(together ? 0.35 : 1)
-                OptionChip("Vary melody", key: "⌥V", isOn: $m.listenOptions.varyMelody)
-                OptionChip("Pedal", key: "Tab · ⌥P", isOn: $m.pedalLatched)
-                OptionChip("Auto replay", key: "⌥A", isOn: $m.autoReplay)
+                Text("Descending · Up & down · 2 Octaves · Rate · Legato 는 Sequential 에만 적용됩니다.")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
+            Divider().overlay(Theme.stroke)
+            HStack(alignment: .top, spacing: 24) {
+                // 코드 · 패턴 듣기: 코드 구성음을 위아래로 늘린다
+                VStack(alignment: .leading, spacing: 8) {
+                    optionSection(title: "CHORD · PATTERN", keys: ["C", "F"])
+                    HStack(spacing: 18) {
+                        MiniStepper(title: "EXTEND ▲", value: m.listenOptions.extendUp, range: 0...ListenOptions.maxExtend) { m.shiftExtendUp($0) }
+                        MiniStepper(title: "EXTEND ▼", value: m.listenOptions.extendDown, range: 0...ListenOptions.maxExtend) { m.shiftExtendDown($0) }
+                    }
+                }
+                Divider().overlay(Theme.stroke)
+                // 모든 듣기에 적용
+                VStack(alignment: .leading, spacing: 8) {
+                    optionSection(title: "ALL", keys: [])
+                    HStack(spacing: 12) {
+                        MiniStepper(title: "OCTAVE", value: m.listenOptions.octave, range: -2...2) { m.shiftOctave($0) }
+                        OptionChip("Pedal", key: "Tab · ⌥P", isOn: $m.pedalLatched)
+                        OptionChip("Auto replay", key: "⌥A", isOn: $m.autoReplay)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 청취 옵션 묶음 제목과 적용되는 듣기 단축키
+    private func optionSection(title: String, keys: [String]) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.system(size: 10, weight: .bold)).tracking(0.8).foregroundStyle(.secondary)
+            ForEach(keys, id: \.self) { KeyCap($0, .listen) }
         }
     }
 
@@ -951,7 +977,7 @@ private struct ShortcutLegend: View {
         ]),
         Group(group: .setting, title: "곡 설정", items: [
             Item(["H L", "← →"], "템포"), Item(["⇧"], "템포 ±5 (누른 채)"), Item(["K J", "↑ ↓"], "Key"), Item(["[ ]"], "Scale"),
-            Item(["1–5"], "복잡도"), Item([", ."], "곡 길이"), Item(["A", "⇧A"], "코드 패턴"), Item(["M", "⇧M"], "멜로디 패턴"), Item(["R", "⇧R"], "두 번째 파트"), Item(["D", "⇧D"], "리듬 패턴"),
+            Item(["1–5"], "복잡도"), Item([", ."], "곡 길이"), Item(["A", "⇧A"], "패턴"), Item(["M", "⇧M"], "멜로디 패턴"), Item(["R", "⇧R"], "두 번째 파트"), Item(["D", "⇧D"], "리듬 패턴"),
         ]),
     ]
 

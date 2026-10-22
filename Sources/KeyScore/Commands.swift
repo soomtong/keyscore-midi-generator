@@ -39,7 +39,7 @@ struct KeyScoreCommands: Commands {
                 .disabled(!m.isGenerating)
             Button("현재 설정으로 다시 전개") { m.rebuildAndPlay() }
                 .disabled(m.arrangement == nil)
-            Button("Randomize (Key · Scale · 템포 · 복잡도 · 멜로디 · 코드 패턴 · 진행)") { m.randomize() }
+            Button("Randomize (Key · Scale · 템포 · 복잡도 · 멜로디 · 패턴 · 진행)") { m.randomize() }
                 .keyboardShortcut("r", modifiers: .command)
             Button("Randomize + 청취 옵션 (Rate · 음 길이)") { m.randomize(includeListenOptions: true) }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
@@ -104,8 +104,8 @@ struct KeyScoreCommands: Commands {
             }
             Button("멜로디 패턴 다음") { m.cycleMelodyStyle(1) }.shortcut("m", typing: m.isTyping)
             Button("멜로디 패턴 이전") { m.cycleMelodyStyle(-1) }.shortcut("m", .shift, typing: m.isTyping)
-            Button("코드 패턴 다음") { m.cycleChordPattern(1) }.shortcut("a", typing: m.isTyping)
-            Button("코드 패턴 이전") { m.cycleChordPattern(-1) }.shortcut("a", .shift, typing: m.isTyping)
+            Button("패턴 다음") { m.cycleChordPattern(1) }.shortcut("a", typing: m.isTyping)
+            Button("패턴 이전") { m.cycleChordPattern(-1) }.shortcut("a", .shift, typing: m.isTyping)
             Button("리듬 패턴 다음") { m.cycleDrumPattern(1) }.shortcut("d", typing: m.isTyping)
             Button("리듬 패턴 이전") { m.cycleDrumPattern(-1) }.shortcut("d", .shift, typing: m.isTyping)
             Button("두 번째 파트 다음") { m.cycleSecondPart(1) }.shortcut("r", typing: m.isTyping)
