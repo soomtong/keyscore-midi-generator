@@ -2,6 +2,8 @@
 
 macOS 전용. OpenRouter LLM 으로 멜로디/코드 섹션을 만들고, CoreMIDI 가상 소스 "KeyScore" 로 가상악기/외장악기에 송신한다.
 
+![KeyScore 스케일/코드 청취 탭](screenshot.png)
+
 ## 실행
     swift run KeyScore            # 개발용
     Scripts/build-app.sh          # build/KeyScore.app (아이콘 포함)
