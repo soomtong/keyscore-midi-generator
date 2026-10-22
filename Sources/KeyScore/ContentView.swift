@@ -29,7 +29,6 @@ struct ContentView: View {
                 VStack(spacing: 10) {
                     if m.showSettings { settingsCard.transition(.opacity.combined(with: .move(edge: .top))) }
                     keyScaleBpmCard
-                    complexityCard
                     modeCard
                     chordPatternCard
                 }
@@ -45,7 +44,7 @@ struct ContentView: View {
         .focusEffectDisabled()
         .onChange(of: focus) { _, new in m.isTyping = new != nil }
         .tint(accent)
-        .frame(minWidth: 800, minHeight: 620)
+        .frame(minWidth: 860, minHeight: 620)
         .onAppear {
             installKeyMonitor()
             Task { releaseFocus() }  // 시작할 때 입력칸이 포커스를 잡으면 단축키가 꺼진다
@@ -163,25 +162,6 @@ struct ContentView: View {
                             .frame(width: 30, alignment: .trailing)
                     }
                 }
-            }
-        }
-    }
-
-    private var complexityCard: some View {
-        Card(title: "복잡도 · 멜로디 패턴") {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    ToggleGroup(items: (1...Theory.maxComplexity).map { ($0, Theory.complexityNames[$0]) },
-                                badges: (1...Theory.maxComplexity).map { "\($0)" }, badgeGroup: .setting, selection: $m.complexity)
-                        .frame(width: 420)
-                    DarkMenu(items: MelodyStyle.allCases.map { ($0, $0.rawValue) }, selection: $m.melodyStyle)
-                    KeyCap("M", .setting)
-                    KeyCap("⇧M", .setting)
-                    Button { m.listen(.melody) } label: { Image(systemName: "play.fill") }
-                        .controlSize(.small).focusable(false)
-                    KeyCap("G", .listen)
-                }
-                Text(m.melodyStyle.summary).font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -375,32 +355,47 @@ struct ContentView: View {
 
     private var listenTab: some View {
         VStack(alignment: .leading, spacing: 8) {
+            listenRow(title: "멜로디", detail: m.melodyStyle.summary, key: "G") {
+                m.listen(.melody)
+            } picker: {
+                DarkMenu(items: MelodyStyle.allCases.map { ($0, $0.rawValue) }, selection: $m.melodyStyle, width: 150)
+                KeyCap("M", .setting)
+                KeyCap("⇧M", .setting)
+            }
             listenRow(title: "코드", detail: nil, key: "C") {
                 m.listen(.chord)
             } picker: {
                 DarkMenu(items: Theory.chordQualities.indices.map { ($0, Theory.chordQualities[$0].symbol) },
                          selection: $m.chordQualityIndex, width: 110)
             }
+            // 복잡도는 주로 패턴 듣기(코드 진행)의 소리를 바꾸므로 같은 줄 오른쪽에 둔다
             listenRow(title: "패턴", detail: nil, key: "F") {
                 m.listen(.progression)
             } picker: {
                 DarkMenu(items: Theory.progressions.indices.map { ($0, Theory.progressions[$0].name) },
                          selection: $m.progressionIndex, width: 150)
-                PatternBadge(pattern: m.chordPattern) { m.cycleChordPattern(1) }
+                PatternBadge(pattern: m.chordPattern) { m.cycleChordPattern(1) }.fixedSize()
+            } trailing: {
+                ToggleGroup(items: (1...Theory.maxComplexity).map { ($0, Theory.complexityNames[$0]) },
+                            badges: (1...Theory.maxComplexity).map { "\($0)" }, badgeGroup: .setting, selection: $m.complexity)
+                    .frame(width: 400)
+                    .help("복잡도 (1–5)")
             }
             listenOptionsPanel
         }
     }
 
-    private func listenRow<P: View>(title: String, detail: String?, key: String,
-                                    action: @escaping () -> Void, @ViewBuilder picker: () -> P) -> some View {
+    private func listenRow<P: View, T: View>(title: String, detail: String?, key: String,
+                                             action: @escaping () -> Void, @ViewBuilder picker: () -> P,
+                                             @ViewBuilder trailing: () -> T = { EmptyView() }) -> some View {
         HStack(spacing: 8) {
             Button(action: action) { Label("\(title) 듣기", systemImage: "play.fill").frame(width: 84, alignment: .leading) }
                 .controlSize(.small)
             KeyCap(key, .listen)
             picker()
-            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
-            Spacer()
+            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail) }
+            Spacer(minLength: 8)
+            trailing()
         }
     }
 

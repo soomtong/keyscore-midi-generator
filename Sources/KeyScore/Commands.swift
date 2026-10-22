@@ -49,7 +49,7 @@ struct KeyScoreCommands: Commands {
             Button("스케일 듣기") { m.listen(.scale) }.shortcut("s", typing: m.isTyping)
             Button("코드 듣기") { m.tab = .listen; m.listen(.chord) }.shortcut("c", typing: m.isTyping)
             Button("패턴 듣기 (코드 진행)") { m.tab = .listen; m.listen(.progression) }.shortcut("f", typing: m.isTyping)
-            Button("멜로디 패턴 듣기") { m.listen(.melody) }.shortcut("g", typing: m.isTyping)
+            Button("멜로디 패턴 듣기") { m.tab = .listen; m.listen(.melody) }.shortcut("g", typing: m.isTyping)
             Divider()
             Button("다음 스케일") { m.shiftScale(1) }.shortcut("s", .shift, typing: m.isTyping)
             Button("이전 스케일") { m.shiftScale(-1) }.keyboardShortcut("s", modifiers: [.option, .shift])
