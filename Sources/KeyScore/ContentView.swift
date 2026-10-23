@@ -504,6 +504,14 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    OptionLabel("MIDI CLOCK · 템포 동기화")
+                    OptionChip("Send Clock · Start / Stop", key: "", isOn: $m.sendClock)
+                    Text("켜면 재생을 시작할 때 Start, 재생하는 동안 4분음표당 24 펄스의 Clock, 멈출 때 Stop 을 \"KeyScore\" 로 보냅니다. 가상악기나 DAW 에서 외부 MIDI Clock 동기화를 켜면 아르페지에이터 · LFO · 딜레이가 앱 템포를 따라옵니다. 반복 재생은 처음으로 돌아갈 때마다 Start 를 다시 보냅니다.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text("KeyScore 버전 \(AppInfo.versionString)")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -583,6 +591,8 @@ private struct StatusIcons: View {
                        help: "MIDI 출력 준비됨 — 가상 소스 \"KeyScore\" (노트가 나갈 때 깜빡임)")
             StatusIcon(symbol: "arrow.down.to.line", lit: m.pedalActive, tint: .orange,
                        help: m.pedalActive ? "서스테인 페달 ON" : "서스테인 페달 OFF — Tab 을 누르는 동안, 또는 ⌥P 로 고정")
+            StatusIcon(symbol: "metronome", lit: m.sendClock, tint: Theme.play,
+                       help: m.sendClock ? "MIDI Clock 송신 ON — 수신 측이 앱 템포를 따라옴 (설정 ⌘,)" : "MIDI Clock 송신 OFF — 설정(⌘,) 또는 재생 메뉴에서 켭니다")
             StatusIcon(symbol: "arrow.triangle.2.circlepath", lit: m.autoReplay, tint: Theme.lcdText,
                        help: m.autoReplay ? "자동 재생 ON (⌥A) — 청취 중 값을 바꾸면 다시 재생" : "자동 재생 OFF (⌥A)")
             if m.isGenerating {
@@ -1084,8 +1094,10 @@ private struct OptionChip: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(title).font(.system(size: 11, weight: .medium))
-            Text(key).font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(isOn ? Color.white.opacity(0.65) : Color.secondary.opacity(0.55))
+            if !key.isEmpty {
+                Text(key).font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(isOn ? Color.white.opacity(0.65) : Color.secondary.opacity(0.55))
+            }
         }
         .foregroundStyle(isOn ? Color.white : Color.secondary)
         .padding(.horizontal, 9).padding(.vertical, 5)

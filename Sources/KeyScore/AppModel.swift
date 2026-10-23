@@ -91,6 +91,14 @@ final class AppModel {
     var pedalHeld = false { didSet { syncPedal() } }
     var pedalLatched = false { didSet { syncPedal() } }
     var pedalActive: Bool { pedalHeld || pedalLatched }
+    /// MIDI Clock(4분음표당 24 펄스)과 Start/Stop 송신. 수신 측이 앱 템포를 따라오게 할 때 켠다.
+    /// Clock 을 받으면 트랜스포트가 움직이는 수신기도 있어 기본은 끄고, 켠 상태는 다음 실행에도 기억한다.
+    var sendClock = UserDefaults.standard.bool(forKey: "midi.sendClock") {
+        didSet {
+            UserDefaults.standard.set(sendClock, forKey: "midi.sendClock")
+            player.setClock(sendClock)
+        }
+    }
 
     // 재생
     var isPlaying = false
@@ -121,6 +129,7 @@ final class AppModel {
         let key = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] ?? Keychain.load() ?? ""
         apiKey = key
         persistedKey = key
+        player.setClock(sendClock)
         player.onProgress = { [weak self] t in
             Task { @MainActor in self?.position = t }
         }
@@ -235,6 +244,11 @@ final class AppModel {
     func toggleLoop() {
         loop.toggle()
         status = loop ? "반복 켬" : "반복 끔"
+    }
+
+    func toggleClock() {
+        sendClock.toggle()
+        status = sendClock ? "MIDI Clock 송신 켬" : "MIDI Clock 송신 끔"
     }
 
     func toggleSettings() { showSettings.toggle() }

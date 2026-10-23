@@ -17,7 +17,9 @@ Swift 6 언어 모드(swift-tools-version 6.0), macOS 14 이상. 동시성 설�
 - Second 파트(4번 채널): Riff 로 생성하면 LLM 이 섹션마다 1~2마디 리프를 쓰고, 앱은 멜로디가 쉬는 마디와 멜로디가 없는 간주 섹션에만 리프를 놓는다.
 - Rhythm(10번 채널): 드럼은 앱이 General MIDI 노트로 연주한다. 리듬이 켜져 있으면 LLM 에 그루브를 알려 멜로디에 반영하고, 섹션마다 강약(none/light/full)과 필인 여부만 받는다. 크래시는 앞 섹션보다 세지거나 필인 뒤에만 친다.
 - FORM: 곡은 intro(처음 한 번) · loop(길이만큼 반복) · outro(끝에 한 번)로 전개한다. 남는 길이는 loop 의 뒷부분(후렴 쪽)으로 채운다. 구성은 Free(AI) / A-B-간주-후렴 / Verse-Chorus / AABA 중에서 고르며, 섹션 역할(verse, prechorus, break, chorus …)에 따라 드럼 편성 기본값이 정해진다.
-- 상단 디스플레이 아이콘: MIDI 출력(노트가 나갈 때 깜빡임), 서스테인 페달, 자동 재생, API key 상태. 마우스를 올리면 설명이 나온다.
+- MIDI Clock: 설정(⌘,) 또는 재생 메뉴에서 켜면 재생할 때 Start, 4분음표당 24 펄스의 Clock, 정지할 때 Stop 을 "KeyScore" 로 보낸다 (기본 끔).
+  가상악기/DAW 에서 외부 MIDI Clock 동기화를 켜면 아르페지에이터 · LFO · 딜레이가 앱 템포를 따라온다. 반복 재생은 처음으로 돌아갈 때마다 Start 를 다시 보낸다.
+- 상단 디스플레이 아이콘: MIDI 출력(노트가 나갈 때 깜빡임), 서스테인 페달, MIDI Clock, 자동 재생, API key 상태. 마우스를 올리면 설명이 나온다.
 
 ## 구조
 - LLM 은 섹션과 form 만 JSON 으로 생성, Arranger 가 목표 길이(30초~12분, 30초 단위)에 맞춰 전개.

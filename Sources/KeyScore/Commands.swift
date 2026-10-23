@@ -30,6 +30,7 @@ struct KeyScoreCommands: Commands {
                 .disabled(m.nowPlaying.isEmpty)
             Toggle("반복 재생", isOn: Binding(get: { m.loop }, set: { _ in m.toggleLoop() }))
                 .keyboardShortcut("l", modifiers: .option)
+            Toggle("MIDI Clock 보내기 (수신 측 템포 동기화)", isOn: Binding(get: { m.sendClock }, set: { _ in m.toggleClock() }))
             Divider()
             Button("곡 생성 (OpenRouter)") { m.generate() }
                 .keyboardShortcut("g", modifiers: .command)

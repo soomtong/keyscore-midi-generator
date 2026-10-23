@@ -193,6 +193,115 @@ final class MidiPlayerTests: XCTestCase {
     }
 }
 
+/// MIDI Clock(0xF8) 과 Start(0xFA) / Continue(0xFB) / Stop(0xFC) / Song Position Pointer(0xF2) 송신.
+private func isSystem(_ m: Receiver.Message) -> Bool { m.status >= 0xF0 }
+
+final class MidiClockTests: XCTestCase {
+    func testClockCountCoversOneCycle() {
+        XCTAssertEqual(MidiPlayer.clockCount(totalBeats: 1), 24)
+        XCTAssertEqual(MidiPlayer.clockCount(totalBeats: 7.5), 180)  // 스케일 듣기 (1/8 × 15)
+        XCTAssertEqual(MidiPlayer.clockCount(totalBeats: 0), 0)
+        XCTAssertEqual(MidiPlayer.clockCount(totalBeats: .nan), 0)
+        XCTAssertEqual(MidiPlayer.clockCount(totalBeats: .infinity), 0)
+    }
+
+    /// 기본은 꺼져 있어 노트와 CC 만 나간다.
+    func testClockIsOffByDefault() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        let song = Song(title: "c", bpm: 240, events: [NoteEvent(channel: 0, pitch: 60, velocity: 90, start: 0, length: 0.5)], totalBeats: 1)
+        player.play(song, loop: false)
+        Thread.sleep(forTimeInterval: song.seconds + 0.3)
+        XCTAssertFalse(rx.messages.isEmpty)
+        XCTAssertTrue(rx.messages.filter(isSystem).isEmpty, "\(rx.messages.filter(isSystem).map(\.status))")
+    }
+
+    /// Start → 4분음표당 24 펄스 → Stop. 첫 Clock 은 첫 Note On 보다 먼저 나가고, 펄스 간격은 템포를 따른다.
+    func testClockFollowsTempoBetweenStartAndStop() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        player.setClock(true)
+        let bpm = 120.0
+        let events = (0..<4).map { NoteEvent(channel: 0, pitch: 60, velocity: 90, start: Double($0), length: 0.5) }
+        let song = Song(title: "clock", bpm: bpm, events: events, totalBeats: 4)
+        player.play(song, loop: false)
+        Thread.sleep(forTimeInterval: song.seconds + 0.4)
+
+        let all = rx.messages
+        XCTAssertEqual(all.first(where: isSystem)?.status, 0xFA, "Start 가 먼저")
+        XCTAssertEqual(all.last(where: isSystem)?.status, 0xFC, "곡이 끝나면 Stop")
+        let firstClock = try XCTUnwrap(all.firstIndex { $0.status == 0xF8 })
+        let firstOn = try XCTUnwrap(all.firstIndex { $0.status & 0xF0 == 0x90 })
+        XCTAssertLessThan(firstClock, firstOn, "같은 시각이면 Clock 이 먼저")
+
+        let clocks = all.filter { $0.status == 0xF8 }.map(\.at)
+        XCTAssertEqual(clocks.count, 4 * MidiPlayer.clocksPerBeat)
+        let step = 60 / bpm / Double(MidiPlayer.clocksPerBeat)  // 20.8 ms
+        let worst = zip(clocks.dropFirst(), clocks).map { abs($0 - $1 - step) }.max() ?? 0
+        print("CLOCK worst gap error \(Int(worst * 1e6)) µs")
+        XCTAssertLessThan(worst, 0.008)
+        XCTAssertEqual(clocks.last! - clocks.first!, step * Double(clocks.count - 1), accuracy: 0.01)
+        // 박마다 Note On 이 펄스 24개 간격으로 온다 (0, 24, 48, 72 번째 펄스와 같은 시각)
+        let ons = all.filter { $0.status & 0xF0 == 0x90 }.map(\.at)
+        for (beat, on) in ons.enumerated() {
+            XCTAssertEqual(on, clocks[beat * MidiPlayer.clocksPerBeat], accuracy: 0.004)
+        }
+    }
+
+    /// 반복 재생은 처음으로 돌아갈 때마다 Start 를 다시 보내고, 바퀴마다 펄스 수가 같다.
+    func testLoopRestartsWithStart() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        player.setClock(true)
+        let song = Song(title: "loop", bpm: 240, events: [NoteEvent(channel: 0, pitch: 60, velocity: 90, start: 0, length: 0.5)], totalBeats: 1.5)
+        player.play(song, loop: true)  // 한 바퀴 0.375 초
+        Thread.sleep(forTimeInterval: 1.0)
+        player.stop()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let system = rx.messages.filter(isSystem).map(\.status)
+        XCTAssertEqual(system.last, 0xFC)
+        // Start 로 나눈 각 바퀴(마지막 바퀴는 중간에 멈춤)의 펄스 수
+        let cycles = system.dropLast().split(separator: 0xFA, omittingEmptySubsequences: false).dropFirst().map(\.count)
+        XCTAssertGreaterThanOrEqual(cycles.count, 3, "\(cycles)")
+        for full in cycles.dropLast() { XCTAssertEqual(full, 36) }
+    }
+
+    /// 재생 중에 켜면 다음 16분음표 자리를 SPP 로 알리고 Continue 뒤에 그 자리부터 펄스를 보낸다. 끄면 바로 Stop.
+    func testTogglingDuringPlaybackUsesSongPositionAndStop() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        let bpm = 120.0  // 16분음표 0.125 초
+        let song = Song(title: "late", bpm: bpm, events: [NoteEvent(channel: 0, pitch: 60, velocity: 90, start: 0, length: 0.5)], totalBeats: 8)
+        player.play(song, loop: false)
+        let started = Double(DispatchTime.now().uptimeNanoseconds) / 1e9
+        Thread.sleep(forTimeInterval: 0.3)
+        player.setClock(true)
+        Thread.sleep(forTimeInterval: 0.5)
+        player.setClock(false)
+        Thread.sleep(forTimeInterval: 0.2)
+        let afterOff = rx.messages.count
+        Thread.sleep(forTimeInterval: 0.2)
+        player.stop()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let all = rx.messages
+        let system = all.filter(isSystem)
+        XCTAssertEqual(system.map(\.status).first, 0xF2)
+        XCTAssertEqual(system.map(\.status).dropFirst().first, 0xFB)
+        XCTAssertFalse(system.contains { $0.status == 0xFA }, "중간에 켜면 Start 가 아니라 Continue")
+        let spp = try XCTUnwrap(system.first).d1
+        XCTAssertTrue((3...4).contains(spp), "0.3 초 뒤의 다음 16분음표: \(spp)")
+        // 첫 펄스는 SPP 자리에서 나간다
+        let firstClock = try XCTUnwrap(system.first { $0.status == 0xF8 }).at
+        XCTAssertEqual(firstClock - started, Double(spp) * 0.125, accuracy: 0.02)
+        // 끈 뒤에는 Stop 하나뿐이고, 정지할 때 Stop 을 다시 보내지 않는다
+        XCTAssertEqual(system.last?.status, 0xFC)
+        XCTAssertEqual(system.filter { $0.status == 0xFC }.count, 1)
+        XCTAssertTrue(all[afterOff...].filter(isSystem).isEmpty)
+    }
+}
+
 /// AppModel 에서 청취 옵션을 켜고 실제로 나오는 MIDI 노트 순서를 확인한다.
 final class ListenOptionsEndToEndTests: XCTestCase {
     @MainActor
