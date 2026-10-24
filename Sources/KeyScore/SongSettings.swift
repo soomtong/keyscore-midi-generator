@@ -29,14 +29,14 @@ struct PromptSettings: Equatable {
     var root: Int
     var scaleIndex: Int
     var complexity: Int
-    var melodyStyle: MelodyStyle
+    var phrase: Phrase?
     var mood: String
     var progressionIndex: Int
     var formPreset: FormPreset
 
     func changes(from old: Self) -> [String] {
         [("Key", root != old.root), ("Scale", scaleIndex != old.scaleIndex), ("복잡도", complexity != old.complexity),
-         ("멜로디 패턴", melodyStyle != old.melodyStyle), ("분위기", mood != old.mood),
+         ("프레이즈", phrase != old.phrase), ("분위기", mood != old.mood),
          ("진행", progressionIndex != old.progressionIndex), ("FORM", formPreset != old.formPreset)]
             .filter(\.1).map(\.0)
     }

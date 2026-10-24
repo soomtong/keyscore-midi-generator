@@ -48,14 +48,14 @@ struct KeyScoreCommands: Commands {
 
         CommandMenu("청취") {
             Button("스케일 듣기") { m.listen(.scale) }.shortcut("s", typing: m.isTyping)
-            Button("코드 듣기") { m.tab = .listen; m.listen(.chord) }.shortcut("c", typing: m.isTyping)
+            Button("코드 듣기") { m.listen(.chord) }.shortcut("c", typing: m.isTyping)
             Button("패턴 듣기 (코드 진행)") { m.tab = .listen; m.listen(.progression) }.shortcut("f", typing: m.isTyping)
-            Button("멜로디 패턴 듣기") { m.tab = .listen; m.listen(.melody) }.shortcut("g", typing: m.isTyping)
+            Button("멜로디 (프레이즈) 듣기") { m.tab = .listen; m.listen(.melody) }.shortcut("g", typing: m.isTyping)
             Divider()
             Button("다음 스케일") { m.shiftScale(1) }.shortcut("s", .shift, typing: m.isTyping)
             Button("이전 스케일") { m.shiftScale(-1) }.keyboardShortcut("s", modifiers: [.option, .shift])
-            Button("다음 코드 종류") { m.tab = .listen; m.shiftChordQuality(1) }.shortcut("c", .shift, typing: m.isTyping)
-            Button("이전 코드 종류") { m.tab = .listen; m.shiftChordQuality(-1) }.keyboardShortcut("c", modifiers: [.option, .shift])
+            Button("다음 코드 종류") { m.shiftChordQuality(1) }.shortcut("c", .shift, typing: m.isTyping)
+            Button("이전 코드 종류") { m.shiftChordQuality(-1) }.keyboardShortcut("c", modifiers: [.option, .shift])
             Button("다음 코드 진행") { m.tab = .listen; m.shiftProgression(1) }.shortcut("f", .shift, typing: m.isTyping)
             Button("이전 코드 진행") { m.tab = .listen; m.shiftProgression(-1) }.keyboardShortcut("f", modifiers: [.option, .shift])
             Divider()
@@ -71,6 +71,8 @@ struct KeyScoreCommands: Commands {
                 .keyboardShortcut("g", modifiers: .option)
             Toggle("멜로디 변주 (들을 때마다 다르게)", isOn: $m.listenOptions.varyMelody)
                 .keyboardShortcut("v", modifiers: .option)
+            Toggle("Groove (진행 · 프레이즈에 묶인 드럼)", isOn: $m.listenOptions.groove)
+                .keyboardShortcut("r", modifiers: .option)
             Divider()
             Button("코드 위 확장 늘리기") { m.shiftExtendUp(1) }.keyboardShortcut("u", modifiers: .command)
             Button("코드 위 확장 줄이기") { m.shiftExtendUp(-1) }.keyboardShortcut("u", modifiers: [.command, .shift])
@@ -103,8 +105,8 @@ struct KeyScoreCommands: Commands {
                        isOn: Binding(get: { m.complexity == level }, set: { _ in m.setComplexity(level) }))
                     .shortcut(KeyEquivalent(Character("\(level)")), typing: m.isTyping)
             }
-            Button("멜로디 패턴 다음") { m.cycleMelodyStyle(1) }.shortcut("m", typing: m.isTyping)
-            Button("멜로디 패턴 이전") { m.cycleMelodyStyle(-1) }.shortcut("m", .shift, typing: m.isTyping)
+            Button("프레이즈 다음") { m.cyclePhrase(1) }.shortcut("m", typing: m.isTyping)
+            Button("프레이즈 이전") { m.cyclePhrase(-1) }.shortcut("m", .shift, typing: m.isTyping)
             Button("패턴 다음") { m.cycleChordPattern(1) }.shortcut("a", typing: m.isTyping)
             Button("패턴 이전") { m.cycleChordPattern(-1) }.shortcut("a", .shift, typing: m.isTyping)
             Button("리듬 패턴 다음") { m.cycleDrumPattern(1) }.shortcut("d", typing: m.isTyping)
@@ -120,7 +122,7 @@ struct KeyScoreCommands: Commands {
             Divider()
             Toggle("곡 생성", isOn: Binding(get: { m.tab == .generate }, set: { _ in m.tab = .generate }))
                 .keyboardShortcut("1", modifiers: .command)
-            Toggle("스케일/코드 청취", isOn: Binding(get: { m.tab == .listen }, set: { _ in m.tab = .listen }))
+            Toggle("멜로디/패턴 듣기", isOn: Binding(get: { m.tab == .listen }, set: { _ in m.tab = .listen }))
                 .keyboardShortcut("2", modifiers: .command)
         }
 

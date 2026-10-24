@@ -45,7 +45,10 @@ final class AppModel {
     var loop = false { didSet { player.setLoop(loop) } }
     /// 코드 패턴은 패턴 듣기(코드 진행 재생)에서만 소리에 영향을 준다
     var chordPattern: ChordPattern = .block { didSet { scheduleAutoReplay(patternOnly: true) } }
-    var melodyStyle: MelodyStyle = .free { didSet { scheduleAutoReplay() } }
+    /// 멜로디 듣기의 프레이즈. phraseGuidesMelody 가 켜져 있으면 곡 생성에 멜로디 성격의 본보기로 들어간다.
+    var phrase: Phrase = Phrase.all[0] { didSet { scheduleAutoReplay() } }
+    /// 곡 생성 멜로디에 선택한 프레이즈의 성격과 밀도를 반영한다. 기본은 끔: 켜지 않으면 AI 가 자유롭게 쓴다.
+    var phraseGuidesMelody = false
     var melodyChannel = 1
     var chordChannel = 2
     var bassChannel = 3
@@ -161,12 +164,11 @@ final class AppModel {
         scaleIndex = Int.random(in: 0..<Theory.scales.count)
         bpm = Double(Int.random(in: 60...150))
         complexity = Int.random(in: 1...Theory.maxComplexity)
-        // Free (AI) 는 로컬에서 들을 수 없으므로 제외
-        melodyStyle = MelodyStyle.allCases.filter { $0 != .free }.randomElement()!
+        phrase = Phrase.all.randomElement()!
         chordPattern = ChordPattern.allCases.randomElement()!
         progressionIndex = Int.random(in: 0..<Theory.progressions.count)
         listenOptions.varyMelody = Bool.random()
-        var summary = "\(noteNames[root]) \(scale.name), \(Int(bpm)) BPM, 복잡도 \(complexity), \(melodyStyle.rawValue), \(chordPattern.rawValue)"
+        var summary = "\(noteNames[root]) \(scale.name), \(Int(bpm)) BPM, 복잡도 \(complexity), \(phrase.name), \(chordPattern.rawValue)"
         if includeListenOptions {
             // 코드 순차 청취용. 너무 빠르거나 느린 값(rate 2)은 뺀다.
             let rate = ListenOptions.rates.filter { $0 <= 1 }.randomElement()!
@@ -314,9 +316,11 @@ final class AppModel {
         status = "패턴: \(chordPattern.rawValue)"
     }
 
-    func cycleMelodyStyle(_ d: Int = 1) {
-        melodyStyle = melodyStyle.cycled(by: d)
-        status = "멜로디 패턴: \(melodyStyle.rawValue)"
+    func cyclePhrase(_ d: Int = 1) {
+        let all = Phrase.all
+        let i = all.firstIndex(of: phrase) ?? 0
+        phrase = all[((i + d) % all.count + all.count) % all.count]
+        status = "프레이즈: \(phrase.name) — \(phrase.summary)"
     }
 
     // 청취 옵션
@@ -388,7 +392,7 @@ final class AppModel {
         case ",": shiftLength(-1)
         case ".": shiftLength(1)
         case "a": cycleChordPattern(shift ? -1 : 1)
-        case "m": cycleMelodyStyle(shift ? -1 : 1)
+        case "m": cyclePhrase(shift ? -1 : 1)
         case "d": cycleDrumPattern(shift ? -1 : 1)
         case "r": cycleSecondPart(shift ? -1 : 1)
         case "g": listen(.melody)
@@ -396,8 +400,7 @@ final class AppModel {
         case "s":
             if shift { shiftScale(1) } else { listen(.scale) }  // 스케일은 Key·Scale 카드에서 고르므로 탭은 그대로
         case "c":
-            tab = .listen
-            if shift { shiftChordQuality(1) } else { listen(.chord) }
+            if shift { shiftChordQuality(1) } else { listen(.chord) }  // 코드 듣기는 탭 밖 CHORD 카드
         case "f":
             tab = .listen
             if shift { shiftProgression(1) } else { listen(.progression) }
@@ -420,7 +423,7 @@ final class AppModel {
         saveKey()
         isGenerating = true
         status = "OpenRouter(\(model))에서 생성 중…"
-        let req = GenerateRequest(root: root, scale: scale, bpm: bpm, complexity: complexity, minutes: minutes, mood: mood, melodyStyle: melodyStyle,
+        let req = GenerateRequest(root: root, scale: scale, bpm: bpm, complexity: complexity, minutes: minutes, mood: mood, phrase: phraseGuidesMelody ? phrase : nil,
                                   chordPattern: chordPattern, progression: Theory.progressions[progressionIndex], secondPart: secondPart,
                                   drumPattern: drumPattern, formPreset: formPreset)
         // 생성 중에 설정을 바꿔도 요청한 그때의 설정으로 전개한다
@@ -459,7 +462,7 @@ final class AppModel {
     }
 
     var promptSettings: PromptSettings {
-        PromptSettings(root: root, scaleIndex: scaleIndex, complexity: complexity, melodyStyle: melodyStyle,
+        PromptSettings(root: root, scaleIndex: scaleIndex, complexity: complexity, phrase: phraseGuidesMelody ? phrase : nil,
                        mood: mood, progressionIndex: progressionIndex, formPreset: formPreset)
     }
 
@@ -544,14 +547,21 @@ final class AppModel {
 
     // MARK: 청취
 
-    private func buildPreview(_ kind: PreviewKind) -> Song? {
+    /// Groove 옵션: 진행 · 프레이즈에 묶인 드럼을 쓴다. 묶인 것이 없으면 패턴 듣기는 리듬 패턴 설정, 멜로디 듣기는 없음.
+    var progressionDrums: DrumPattern {
+        listenOptions.groove ? (Theory.progressions[progressionIndex].drums ?? drumPattern) : drumPattern
+    }
+
+    var phraseDrums: DrumPattern { listenOptions.groove ? (phrase.drums ?? .off) : .off }
+
+    private func buildPreview(_ kind: PreviewKind) -> Song {
         let o = listenOptions
         switch kind {
         case .scale:
             return Preview.scale(root: root, type: scale, channel: melodyChannel, octave: o.octave, bpm: bpm)
         case .melody:
-            guard melodyStyle != .free else { return nil }
-            return Preview.melody(root: root, scale: scale, style: melodyStyle, channel: melodyChannel, options: o, bpm: bpm)
+            return Preview.melody(root: root, scale: scale, phrase: phrase, channel: melodyChannel, drums: phraseDrums,
+                                  rhythmChannel: rhythmChannel, options: o, bpm: bpm)
         case .chord:
             return Preview.chord(
                 root: root, quality: Theory.chordQualities[chordQualityIndex],
@@ -559,18 +569,14 @@ final class AppModel {
         case .progression:
             return Preview.progression(
                 root: root, scale: scale, prog: Theory.progressions[progressionIndex], complexity: complexity,
-                pattern: chordPattern, channels: channels, drums: drumPattern, options: o, bpm: bpm)
+                pattern: chordPattern, channels: channels, drums: progressionDrums, options: o, bpm: bpm)
         }
     }
 
     func listen(_ kind: PreviewKind) {
         if kind == .melody && listenOptions.varyMelody { listenOptions.melodySeed = .random(in: .min ... .max) }
-        guard let s = buildPreview(kind) else {
-            status = "Free (AI) 는 곡 생성 시에만 적용됩니다. 로컬로 들으려면 다른 멜로디 패턴을 고르세요."
-            return
-        }
         lastPreview = kind
-        play(s)
+        play(buildPreview(kind))
     }
 
     /// 자동 재생 디바운스: 값이 연달아 바뀌면 마지막 변경 뒤 autoReplayDelay 가 지나서 한 번만 다시 튼다.
@@ -586,7 +592,7 @@ final class AppModel {
     private func autoReplayIfNeeded(patternOnly: Bool) {
         guard autoReplay, isPlaying, !playingArrangement, let kind = lastPreview else { return }
         if patternOnly && kind != .progression { return }
-        guard let s = buildPreview(kind) else { return }
+        let s = buildPreview(kind)
         // 값을 바꾼 직후 재생을 시작하면 잠시 뒤 이 호출이 와서 방금 시작한 재생을 처음부터 다시 틀게 된다.
         // 지금 재생 중인 것과 같은 소리라면 건드리지 않는다.
         if let current = song, current.bpm == s.bpm, current.events == s.events { return }

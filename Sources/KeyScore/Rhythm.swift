@@ -10,8 +10,37 @@ enum DrumPattern: String, CaseIterable, Identifiable {
     case shuffle = "Shuffle"
     case bossa = "Bossa"
     case funk = "Funk 16th"
+    case swing = "Swing"
+    case pop = "Pop 16th"
+    case halfTime = "Half-time"
+    case disco = "Disco"
+    case motown = "Motown"
+    case breakbeat = "Breakbeat"
+    case boomBap = "Boom Bap"
+    case trap = "Trap"
+    case reggaeton = "Reggaeton"
+    case afrobeats = "Afrobeats"
 
     var id: String { rawValue }
+
+    /// 메뉴 묶음
+    enum Group: String, CaseIterable {
+        case classic = "기본"
+        case modern = "모던 팝"
+        case urban = "어반"
+    }
+
+    var group: Group {
+        switch self {
+        case .off, .rock, .fourOnFloor, .ballad, .shuffle, .bossa, .funk, .swing: return .classic
+        case .pop, .halfTime, .disco, .motown, .breakbeat: return .modern
+        case .boomBap, .trap, .reggaeton, .afrobeats: return .urban
+        }
+    }
+
+    static func grouped() -> [(Group, [DrumPattern])] {
+        Group.allCases.map { g in (g, allCases.filter { $0.group == g }) }
+    }
 
     var summary: String {
         switch self {
@@ -22,6 +51,16 @@ enum DrumPattern: String, CaseIterable, Identifiable {
         case .shuffle: return "셋잇단 스윙 하이햇과 백비트"
         case .bossa: return "보사노바: 사이드스틱 클라베와 하이햇 8분음표"
         case .funk: return "16분음표 하이햇과 고스트 노트 스네어"
+        case .swing: return "재즈 라이드 심벌(딩-딩가-딩)과 2·4박 페달 하이햇, 여린 킥"
+        case .pop: return "16분음표 하이햇, 스네어+클랩 백비트, 당김음 킥 (현대 팝)"
+        case .halfTime: return "3박에만 스네어, 넓게 깔리는 하프타임 (팝 발라드 · 시네마틱)"
+        case .disco: return "4분음표 킥, 뒷박 오픈 하이햇, 16분음표 하이햇과 클랩 (디스코 · 누디스코)"
+        case .motown: return "매 박 스네어와 탬버린 8분음표 (모타운 · 60s 소울)"
+        case .breakbeat: return "아멘 브레이크 풍 킥 당김음과 고스트 스네어"
+        case .boomBap: return "묵직한 킥과 스네어, 느긋한 8분음표 하이햇 (90s 힙합 · 네오소울)"
+        case .trap: return "하프타임 스네어+클랩, 16분음표 하이햇과 마디 끝 롤 (트랩 · R&B)"
+        case .reggaeton: return "뎀보우: 4분음표 킥 위에 당김음 스네어 (레게톤 · 라틴 팝)"
+        case .afrobeats: return "당김음 킥과 림, 탬버린 16분음표 (아프로비츠)"
         }
     }
 
@@ -35,12 +74,22 @@ enum DrumPattern: String, CaseIterable, Identifiable {
         case .shuffle: return "triplet shuffle groove: swing the melody (off-beat eighths on triplet offsets such as 0.667)"
         case .bossa: return "bossa nova groove with a clave-like side stick: gently syncopated, anticipated phrasing fits"
         case .funk: return "sixteenth-note funk groove with ghost notes: short, syncopated, percussive phrasing fits"
+        case .swing: return "jazz swing ride pattern with hi-hat on 2 and 4: swing the melody (off-beat eighths on triplet offsets such as 0.667), a walking bass fits"
+        case .pop: return "modern pop groove with sixteenth-note hi-hats, snare and clap on 2 and 4 and a syncopated kick: catchy, rhythmic phrasing fits"
+        case .halfTime: return "half-time groove with the snare only on beat 3: slow, wide phrasing with long notes fits"
+        case .disco: return "disco groove, four-on-the-floor with off-beat open hi-hats and claps: steady, danceable phrasing fits"
+        case .motown: return "Motown groove with the snare on every beat and tambourine eighths: bright, bouncing phrasing fits"
+        case .breakbeat: return "breakbeat groove with syncopated kicks and ghost snares: energetic, syncopated phrasing fits"
+        case .boomBap: return "boom bap hip-hop groove, heavy kick and snare with laid-back eighth-note hi-hats: relaxed, behind-the-beat phrasing fits"
+        case .trap: return "trap groove, half-time snare and clap with rapid sixteenth hi-hats and rolls: sparse melody with space fits"
+        case .reggaeton: return "reggaeton dembow groove, kick on every beat with syncopated snares at 0.75 and 1.5: syncopated, rhythmic phrasing fits"
+        case .afrobeats: return "afrobeats groove with syncopated kick and rim pattern over tambourine sixteenths: lilting, syncopated phrasing fits"
         }
     }
 
     /// General MIDI 드럼 노트
     enum Kit {
-        static let kick = 36, sideStick = 37, snare = 38, closedHat = 42, openHat = 46, crash = 49
+        static let kick = 36, sideStick = 37, snare = 38, clap = 39, closedHat = 42, pedalHat = 44, openHat = 46, crash = 49, ride = 51, tambourine = 54
         static let floorTom = 43, lowTom = 45, midTom = 47, highTom = 50
     }
 
@@ -54,8 +103,10 @@ enum DrumPattern: String, CaseIterable, Identifiable {
         beats.map { Hit(note: note, beat: $0, velocity: vel) }
     }
 
-    private static func hats(every step: Double, count: Int, accentEvery: Int = 2, loud: Int = 78, soft: Int = 56) -> [Hit] {
+    /// 클로즈 하이햇. open 자리에는 넣지 않는다 (GM 에서 두 하이햇은 초크 그룹이라 같은 tick 에 치면 오픈이 바로 끊긴다).
+    private static func hats(every step: Double, count: Int, accentEvery: Int = 2, loud: Int = 78, soft: Int = 56, open: [Double] = []) -> [Hit] {
         (0..<count).map { Hit(note: Kit.closedHat, beat: Double($0) * step, velocity: $0 % accentEvery == 0 ? loud : soft) }
+            .filter { h in !open.contains { abs($0 - h.beat) < 1e-9 } }
     }
 
     /// 4박 한 마디의 타격. bar 는 0부터 세는 마디 번호 (보사노바 클라베가 2마디 주기).
@@ -81,6 +132,39 @@ enum DrumPattern: String, CaseIterable, Identifiable {
             return Self.hits(Kit.kick, [0, 1.75, 2.5], 100) + Self.hits(Kit.snare, [1, 3], 98)
                 + Self.hits(Kit.snare, [0.75, 2.25, 3.5], 34)
                 + Self.hats(every: 0.25, count: 16, accentEvery: 4, loud: 80, soft: 48)
+        case .swing:
+            let ride = [(0.0, 88), (1.0, 80), (1 + 2.0 / 3, 60), (2.0, 88), (3.0, 80), (3 + 2.0 / 3, 60)]
+                .map { Hit(note: Kit.ride, beat: $0.0, velocity: $0.1) }
+            return Self.hits(Kit.kick, [0, 2], 48) + Self.hits(Kit.pedalHat, [1, 3], 72) + ride
+        case .pop:
+            return Self.hits(Kit.kick, [0, 1.75, 2.5], 104) + Self.hits(Kit.snare, [1, 3], 96) + Self.hits(Kit.clap, [1, 3], 84)
+                + Self.hats(every: 0.25, count: 16, accentEvery: 2, loud: 70, soft: 44, open: [3.5]) + Self.hits(Kit.openHat, [3.5], 72)
+        case .halfTime:
+            return Self.hits(Kit.kick, [0, 1.5], 104) + Self.hits(Kit.snare, [2], 100) + Self.hits(Kit.clap, [2], 80)
+                + Self.hats(every: 0.5, count: 8, loud: 66, soft: 46, open: [3.5]) + Self.hits(Kit.openHat, [3.5], 68)
+        case .disco:
+            let open = [0.5, 1.5, 2.5, 3.5]
+            return Self.hits(Kit.kick, [0, 1, 2, 3], 104) + Self.hits(Kit.snare, [1, 3], 94) + Self.hits(Kit.clap, [1, 3], 76)
+                + Self.hits(Kit.openHat, open, 78) + Self.hats(every: 0.25, count: 16, accentEvery: 4, loud: 52, soft: 40, open: open)
+        case .motown:
+            return Self.hits(Kit.kick, [0, 2], 96) + Self.hits(Kit.snare, [0, 1, 2, 3], 84)
+                + (0..<8).map { Hit(note: Kit.tambourine, beat: Double($0) * 0.5, velocity: $0 % 2 == 0 ? 72 : 52) }
+        case .breakbeat:
+            return Self.hits(Kit.kick, [0, 0.5, 2.5], 104) + Self.hits(Kit.snare, [1, 3], 100) + Self.hits(Kit.snare, [1.75, 2.25, 3.75], 38)
+                + Self.hats(every: 0.5, count: 8, loud: 76, soft: 54)
+        case .boomBap:
+            return Self.hits(Kit.kick, [0, 0.75, 2.5], 108) + Self.hits(Kit.snare, [1, 3], 106)
+                + Self.hats(every: 0.5, count: 8, loud: 64, soft: 42)
+        case .trap:
+            let roll = [3.5, 3.625, 3.75, 3.875].enumerated().map { Hit(note: Kit.closedHat, beat: $1, velocity: 50 + $0 * 8) }
+            return Self.hits(Kit.kick, [0, 1.5, 3.25], 110) + Self.hits(Kit.snare, [2], 104) + Self.hits(Kit.clap, [2], 88)
+                + Self.hats(every: 0.25, count: 14, accentEvery: 2, loud: 64, soft: 44) + roll
+        case .reggaeton:
+            return Self.hits(Kit.kick, [0, 1, 2, 3], 104) + Self.hits(Kit.snare, [0.75, 1.5, 2.75, 3.5], 92)
+                + Self.hats(every: 0.5, count: 8, loud: 60, soft: 44)
+        case .afrobeats:
+            return Self.hits(Kit.kick, [0, 1.5, 2.5], 100) + Self.hits(Kit.sideStick, [1, 2.75, 3.5], 86) + Self.hits(Kit.clap, [3], 70)
+                + (0..<16).map { Hit(note: Kit.tambourine, beat: Double($0) * 0.25, velocity: $0 % 4 == 0 ? 58 : 36) }
         }
     }
 
@@ -114,8 +198,9 @@ enum DrumPattern: String, CaseIterable, Identifiable {
                 hits = hits.filter { $0.beat < 2 } + Self.fill
             }
             for h in hits where offset + h.beat < beats - 1e-9 {
+                // 마디 끝의 롤(트랩 3.875박)이 구간을 넘지 않게 길이를 자른다
                 out.append(NoteEvent(channel: channel, pitch: h.note, velocity: max(1, min(127, h.velocity)),
-                                     start: start + offset + h.beat, length: 0.2))
+                                     start: start + offset + h.beat, length: min(0.2, beats - offset - h.beat)))
             }
         }
         if crashOnStart { out.append(NoteEvent(channel: channel, pitch: Kit.crash, velocity: energy == .light ? 80 : 100, start: start, length: 1)) }

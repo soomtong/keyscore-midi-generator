@@ -187,6 +187,8 @@ struct ChordSpec {
     var root: Int  // pitch class
     var quality: ChordQuality
     var beats: Double
+    /// 슬래시 코드의 베이스 pitch class. nil 이면 근음.
+    var bass: Int? = nil
 
     var symbol: String { noteNames[root] + quality.symbol }
 
@@ -196,5 +198,5 @@ struct ChordSpec {
         return quality.intervals.map { base + $0 }
     }
 
-    var bassNote: Int { 36 + root }
+    var bassNote: Int { 36 + (bass ?? root) }
 }

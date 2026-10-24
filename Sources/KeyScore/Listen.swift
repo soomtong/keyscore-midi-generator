@@ -13,8 +13,11 @@ struct ListenOptions: Equatable {
     var extendUp = 0
     var extendDown = 0
     var octave = 0
-    var varyMelody = false  // 멜로디 패턴에 변주를 준다
+    var varyMelody = false  // 멜로디 프레이즈에 변주를 준다
     var melodySeed: UInt64 = 0  // 변주 시드. 멜로디를 새로 들을 때마다 다시 뽑는다
+    /// 진행 · 프레이즈에 묶인 드럼 그루브를 함께 연주한다 (GM 드럼, 리듬 채널).
+    /// 묶인 그루브가 없으면 패턴 듣기는 리듬 패턴 설정을, 멜로디 듣기는 드럼 없이 그대로 둔다.
+    var groove = false
 
     static let rates: [Double] = [0.25, 0.5, 1, 2]
     static let lengths: [Double] = [0, 0.25, 0.5, 1, 2, 4, 8]
@@ -97,13 +100,18 @@ enum Preview {
         return Song(title: "\(noteNames[root]) \(type.name)", bpm: bpm, events: events, totalBeats: beats)
     }
 
-    static func melody(root: Int, scale: ScaleType, style: MelodyStyle, channel: Int,
+    /// 멜로디 듣기: 프레이즈를 선택한 Key 로 옮겨 연주한다. 유명 프레이즈는 원곡의 조성을, 에튀드는 선택한 스케일을 따른다.
+    /// drums 가 꺼져 있지 않으면 프레이즈 길이만큼 리듬 채널로 함께 보낸다.
+    static func melody(root: Int, scale: ScaleType, phrase: Phrase, channel: Int, drums: DrumPattern = .off, rhythmChannel: Int = 10,
                        options o: ListenOptions = ListenOptions(), bpm: Double = 100) -> Song {
-        let events = style.phrase(seed: o.varyMelody ? o.melodySeed : nil).map {
-            NoteEvent(channel: UInt8(channel - 1), pitch: MelodyStyle.pitch(degree: $0.degree, root: root, scale: scale) + 12 * o.octave,
+        var events = phrase.notes(seed: o.varyMelody ? o.melodySeed : nil, in: scale).map {
+            NoteEvent(channel: UInt8(channel - 1), pitch: phrase.pitch($0, root: root, userScale: scale) + 12 * o.octave,
                       velocity: 90, start: $0.beat, length: $0.length)
         }.filter { (0...127).contains($0.pitch) }
-        return Song(title: "\(noteNames[root]) \(scale.name) · \(style.rawValue)\(o.varyMelody ? " (변주)" : "")", bpm: bpm, events: events, totalBeats: 16)
+        let total = phrase.totalBeats
+        events += drums.notes(start: 0, beats: total, channel: UInt8(rhythmChannel - 1))  // 3박자 프레이즈는 drums 가 없다 (Phrase init 불변식)
+        let key = "\(noteNames[root]) \((phrase.scale ?? scale).name)"
+        return Song(title: "\(phrase.name) · \(key)\(o.varyMelody ? " (변주)" : "")", bpm: bpm, events: events, totalBeats: total)
     }
 
     /// 코드 듣기: 코드 종류와 구성음만 들려준다 (코드 패턴과 무관).
@@ -116,20 +124,20 @@ enum Preview {
         return Song(title: c.symbol, bpm: bpm, events: events, totalBeats: beats)
     }
 
+    /// 패턴 듣기(코드 진행): 진행의 코드마다 자기 박 수만큼 코드 패턴과 베이스를 깐다. 한 마디 안에서 코드가 바뀌면 패턴도 거기서 끊긴다.
+    /// 슬래시 코드는 베이스 채널이 지정된 베이스 음을 친다.
     static func progression(root: Int, scale: ScaleType, prog: Theory.Progression, complexity: Int, pattern: ChordPattern,
                             channels: ChannelMap, drums: DrumPattern = .off,
                             options o: ListenOptions = ListenOptions(), bpm: Double = 90) -> Song {
         var events: [NoteEvent] = []
         var t = 0.0
-        for d in prog.degrees {
-            let ivs = Theory.diatonicIntervals(scale: scale, degree: d, complexity: complexity)
-            let pc = (root + scale.intervals[d % scale.intervals.count]) % 12
-            let q = Theory.quality(matching: ivs) ?? ChordQuality(symbol: "", intervals: ivs, complexity: complexity)
-            let c = ChordSpec(root: pc, quality: q, beats: 4)
-            events += pattern.notes(pitches: shape(c.voicing, o), start: t, beats: 4,
+        let chords = Theory.chords(of: prog, root: root, scale: scale, complexity: complexity)
+        // 위 성부는 성부 이동이 작은 전위로 잇는다. 베이스는 따로 근음(또는 슬래시 베이스)을 친다.
+        for (c, voicing) in zip(chords, Theory.voiceLead(chords.map(\.voicing))) {
+            events += pattern.notes(pitches: shape(voicing, o), start: t, beats: c.beats,
                                     channel: UInt8(channels.chords - 1), velocity: 75)
-            events.append(NoteEvent(channel: UInt8(channels.bass - 1), pitch: c.bassNote + 12 * o.octave, velocity: 90, start: t, length: 3.8))
-            t += 4
+            events.append(NoteEvent(channel: UInt8(channels.bass - 1), pitch: c.bassNote + 12 * o.octave, velocity: 90, start: t, length: c.beats * 0.95))
+            t += c.beats
         }
         events += drums.notes(start: 0, beats: t, channel: UInt8(channels.rhythm - 1))
         return Song(title: prog.name, bpm: bpm, events: events.filter { (0...127).contains($0.pitch) }, totalBeats: t)

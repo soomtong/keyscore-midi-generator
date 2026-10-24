@@ -7,12 +7,17 @@ struct GenerateRequest {
     var complexity: Int
     var minutes: Double
     var mood: String = ""
-    var melodyStyle: MelodyStyle = .free
+    /// 멜로디 성격의 본보기가 되는 프레이즈. nil 이면 AI 가 알아서 구성한다.
+    var phrase: Phrase? = nil
     var chordPattern: ChordPattern = .block
     var progression: Theory.Progression? = nil
     var secondPart: SecondPart = .off
     var drumPattern: DrumPattern = .off
     var formPreset: FormPreset = .free
+
+    /// 프롬프트에 쓰는 스케일. 원곡 조성을 고정한 진행(모던 팝 · 유명 코드 라인)을 고르면 brief 와 harmonic backbone 이
+    /// 서로 다른 조성을 말하지 않도록 진행의 조성을 따른다.
+    var effectiveScale: ScaleType { progression?.scale ?? scale }
 }
 
 /// 곡은 여러 번의 LLM 호출로 쌓아 올린다. 화음을 먼저 정하고, 그 위에 베이스와 리듬(바탕),
@@ -43,23 +48,24 @@ enum Generator {
         let foundation: [Stage]
         switch r.drumPattern {
         case .off: foundation = [.bass]
-        case .fourOnFloor, .funk, .bossa, .shuffle: foundation = [.rhythm, .bass]
-        case .rock, .ballad: foundation = [.bass, .rhythm]
+        case .fourOnFloor, .funk, .bossa, .shuffle, .swing, .disco, .breakbeat, .boomBap, .trap, .reggaeton, .afrobeats:
+            foundation = [.rhythm, .bass]
+        case .rock, .ballad, .pop, .halfTime, .motown: foundation = [.bass, .rhythm]
         }
         return [.harmony] + foundation + [.melody]
     }
 
-    /// 선택된 진행을 현재 Key/Scale/복잡도의 코드로 풀어 쓴다 (예: "D min7 - G 7 - C maj7").
+    /// 선택된 진행을 현재 Key/Scale/복잡도의 코드로 풀어 쓴다 (예: "D min7 - G 7 - C maj7"). 한 마디(4박)가 아닌 코드는 박 수를 붙인다.
     /// 복잡도에 맞는 코드 종류가 없으면 구성음을 줄여 가장 가까운 종류를 찾고, 그래도 없으면 nil.
     static func progressionText(_ r: GenerateRequest) -> String? {
         guard let prog = r.progression else { return nil }
         var parts: [String] = []
-        for d in prog.degrees {
-            let ivs = Theory.diatonicIntervals(scale: r.scale, degree: d, complexity: r.complexity)
+        for c in Theory.chords(of: prog, root: r.root, scale: r.effectiveScale, complexity: r.complexity) {
+            let ivs = c.quality.intervals
             guard let q = (1...ivs.count).reversed().lazy.compactMap({ Theory.quality(matching: Array(ivs.prefix($0))) }).first
             else { return nil }
-            let pc = (r.root + r.scale.intervals[d % r.scale.intervals.count]) % 12
-            parts.append("\(noteNames[pc]) \(q.symbol)")
+            let slash = c.bass.map { "/\(noteNames[$0])" } ?? ""
+            parts.append("\(noteNames[c.root]) \(q.symbol)\(slash)" + (c.beats == 4 ? "" : " (\(fmt(c.beats)) beat\(c.beats == 1 ? "" : "s"))"))
         }
         return parts.joined(separator: " - ")
     }
@@ -93,10 +99,10 @@ enum Generator {
 
     /// 모든 단계가 공유하는 곡 설명.
     static func brief(_ r: GenerateRequest) -> String {
-        let scaleNotes = r.scale.intervals.map { noteNames[(r.root + $0) % 12] }.joined(separator: " ")
+        let scaleNotes = r.effectiveScale.intervals.map { noteNames[(r.root + $0) % 12] }.joined(separator: " ")
         return """
         Song brief:
-        - key: \(noteNames[r.root]), scale: \(r.scale.name) (notes: \(scaleNotes))
+        - key: \(noteNames[r.root]), scale: \(r.effectiveScale.name) (notes: \(scaleNotes))
         - tempo: \(Int(r.bpm)) BPM, 4/4 (\(tempoFeel(r.bpm)))
         - accompaniment: the host plays every chord as \(r.chordPattern.promptHint), voiced around MIDI 48..71.
         \(r.drumPattern == .off ? "- drums: none" : "- drums: the host plays a \(r.drumPattern.promptHint); kick on beats \(kickBeats(r.drumPattern)) of every bar.")
@@ -219,7 +225,7 @@ enum Generator {
         Step \(stages(r).count) of \(stages(r).count): write the melody\(riff ? " and the riff" : "") on top of the finished backing track. The chords, bass line\(drumsKnown ? " and drum plan" : "") below are final.
         \(brief(r))
         - melodic complexity: \(melodicText)
-        \(r.melodyStyle == .free ? "" : "- melody style (\(r.melodyStyle.rawValue)): \(r.melodyStyle.promptHint)")
+        \(r.phrase.map { "- melody character: \($0.character)" } ?? "")
 
         \(sheet(arr, bass: true, drums: drumsKnown, tones: 60...88))
 
@@ -227,7 +233,7 @@ enum Generator {
         {"sections": {"<name>": {"melody": [[beat, midi_pitch, length_in_beats], ...]\(riff ? ", \"riff\": {\"bars\": 1 or 2, \"notes\": [[beat, midi_pitch, length_in_beats], ...]}" : "")}}}
         Rules:
         - write every section above, using the same section names.
-        - melody: beat is the offset from the section start (0 <= beat < bars*4), pitches within MIDI 60..88 and mostly from the scale notes, with rests, repeated motifs and phrase shape. Density: \(r.melodyStyle.notesPerBar). Notes must not overlap.
+        - melody: beat is the offset from the section start (0 <= beat < bars*4), pitches within MIDI 60..88 and mostly from the scale notes, with rests, repeated motifs and phrase shape. Density: \(r.phrase?.notesPerBar ?? "roughly 2 to 5 notes per bar"). Notes must not overlap.
         - harmony: on strong beats (beats 0 and 2 of a bar) and wherever a chord changes, use a tone of the chord sounding at that beat (pick from its "all tones" MIDI list above); never sit a semitone above or below the bass note sounding at the same time. Non-chord tones are passing or neighbour notes that resolve by step.
         - roles: verse is calm and low, prechorus rises in register and density, chorus is the highest and most memorable hook (repeat its motif), a break has an empty melody (an instrumental moment), bridge contrasts, intro and outro are short and lighter or empty.
         - leave room for the accompaniment: \(r.chordPattern.promptHint).

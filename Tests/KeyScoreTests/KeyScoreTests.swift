@@ -89,18 +89,173 @@ final class KeyScoreTests: XCTestCase {
         }
     }
 
-    func testMelodyPhrasesFitFourBars() {
-        for style in MelodyStyle.allCases where style != .free {
-            let notes = style.phrase()
-            XCTAssertFalse(notes.isEmpty, style.rawValue)
-            XCTAssertEqual(style.phrase(seed: 7).count, notes.count, style.rawValue)
-            XCTAssertTrue(style.phrase(seed: 7).elementsEqual(style.phrase(seed: 7), by: { $0 == $1 }), style.rawValue)
-            for n in notes + style.phrase(seed: 1) + style.phrase(seed: 2) {
-                XCTAssertTrue(n.beat >= 0 && n.beat + n.length <= 16.01, "\(style.rawValue) \(n)")
-                let pitch = MelodyStyle.pitch(degree: n.degree, root: 7, scale: Theory.scales[4])
-                XCTAssertTrue((48...96).contains(pitch), "\(style.rawValue) \(pitch)")
+    func testPhrasesFitTheirBarsAndStayInRange() {
+        let pent = Theory.scales[4]
+        XCTAssertEqual(Set(Phrase.all.map(\.name)).count, Phrase.all.count, "프레이즈 이름은 유일해야 한다")
+        for p in Phrase.all {
+            let notes = p.notes
+            XCTAssertFalse(notes.isEmpty, p.name)
+            XCTAssertFalse(p.summary.isEmpty, p.name)
+            XCTAssertFalse(p.character.isEmpty, p.name)
+            XCTAssertTrue(p.meter == 3 || p.meter == 4, p.name)
+            XCTAssertNil(p.meter == 3 ? p.drums : nil, "3박자 프레이즈에는 4/4 드럼을 묶지 않는다: \(p.name)")
+            // 변주는 음 수를 지키고 같은 시드면 같은 결과
+            let varied = p.notes(seed: 7, in: pent)
+            XCTAssertEqual(varied.count, notes.count, p.name)
+            XCTAssertEqual(varied, p.notes(seed: 7, in: pent), p.name)
+            XCTAssertEqual(p.notes(seed: nil, in: pent), notes, p.name)
+            for n in notes + p.notes(seed: 1, in: pent) + p.notes(seed: 2, in: pent) {
+                XCTAssertTrue(n.beat >= 0 && n.beat + n.length <= p.totalBeats + 0.01, "\(p.name) \(n)")
+                XCTAssertGreaterThan(n.length, 0, p.name)
+                for root in [0, 6, 11] {
+                    let pitch = p.pitch(n, root: root, userScale: pent)
+                    XCTAssertTrue((24...108).contains(pitch), "\(p.name) root \(root) pitch \(pitch)")
+                }
+            }
+            // 음은 서로 겹치지 않는다 (시작 시각이 단조 증가)
+            XCTAssertTrue(zip(notes, notes.dropFirst()).allSatisfy { $0.beat + $0.length <= $1.beat + 0.01 }, p.name)
+        }
+        // 마디 수를 잘못 세면 올림 때문에 드러나지 않으므로 채보한 길이를 직접 확인한다
+        for (name, beats) in [("Ode to Joy", 32.0), ("Minuet in G", 24), ("Happy Birthday", 24), ("Star Wars", 20), ("Super Mario Bros.", 24),
+                              ("Tetris", 32), ("Für Elise", 12), ("He's a Pirate", 21), ("Hedwig's Theme", 24), ("Moonlight Sonata", 16)] {
+            XCTAssertEqual(Phrase.named(name)!.totalBeats, beats, name)
+        }
+        XCTAssertTrue(Phrase.named("Star Wars")!.usesTriplets)
+        XCTAssertFalse(Phrase.named("Ode to Joy")!.usesTriplets)
+        XCTAssertTrue(Phrase.named("Moonlight Sonata")!.notesPerBar.contains("0.333"))
+        XCTAssertEqual(Phrase.named("Minuet in G")!.notesPerBar, "roughly 5 to 7 notes per bar")  // 33음 / 24박 × 4 ≈ 6
+        // 유명 프레이즈는 자기 조성을 따르고, 에튀드는 선택한 스케일을 따른다
+        let ode = Phrase.named("Ode to Joy")!
+        let e = PhraseNote(degree: 2, beat: 0, length: 1)
+        XCTAssertEqual(ode.pitch(e, root: 0, userScale: Theory.scales[1]), 64)  // 단조를 골라도 E
+        XCTAssertEqual(Phrase.named("Scale Run")!.pitch(e, root: 0, userScale: Theory.scales[1]), 63)
+        // 음수 디그리와 임시표: 단조에서 -1# 은 이끎음
+        XCTAssertEqual(Phrase.pitch(PhraseNote(degree: -1, alter: 1, beat: 0, length: 1), root: 9, scale: Theory.scales[1]), 56)
+        XCTAssertEqual(Phrase.pitch(PhraseNote(degree: -7, beat: 0, length: 1), root: 0, scale: Theory.scales[0]), 48)
+    }
+
+    func testPhraseNotationParsesLengthsAccidentalsAndRests() {
+        let notes = Phrase.parse("0 2#/.5 r/.5 | -3b/2 4/t 4/T", unit: 1)
+        XCTAssertEqual(notes.map(\.degree), [0, 2, -3, 4, 4])
+        XCTAssertEqual(notes.map(\.alter), [0, 1, -1, 0, 0])
+        XCTAssertEqual(notes.map(\.beat), [0, 1, 2, 4, 4 + 1.0 / 3])
+        XCTAssertEqual(notes.last!.length, 2.0 / 3, accuracy: 1e-9)
+    }
+
+    func testProgressionsResolveWithBeatsFamiliesAndKeys() {
+        let major = Theory.scales[0]
+        // 기본 진행은 현재 스케일을 따른다: 자연 단조의 I–V–vi–IV 는 i–v–VI–iv
+        let axis = Theory.progressions[0]
+        let minorAxis = Theory.chords(of: axis, root: 0, scale: Theory.scales[1], complexity: 1)
+        XCTAssertEqual(minorAxis.map(\.quality.symbol), ["min", "min", "maj", "min"])
+        XCTAssertEqual(minorAxis.map(\.beats), [4, 4, 4, 4])
+        // 유명 코드 라인은 자기 조성을 따른다: 단조를 골라도 블루스는 모두 도미넌트 7th
+        let blues = Theory.progressions.first { $0.name == "12-bar Blues" }!
+        let chords = Theory.chords(of: blues, root: 9, scale: Theory.scales[1], complexity: 2)
+        XCTAssertEqual(chords.count, 12)
+        XCTAssertTrue(chords.allSatisfy { $0.quality.symbol == "7" })
+        XCTAssertEqual(chords.map(\.root).prefix(5), [9, 9, 9, 9, 2])  // A A A A D
+        XCTAssertEqual(blues.totalBeats, 48)
+        // 모던 팝: 한 마디 안의 코드 변화(2박), 슬래시 베이스, 고정 텐션
+        let ballad = Theory.progressions.first { $0.name == "K-Ballad" }!
+        let kb = Theory.chords(of: ballad, root: 0, scale: Theory.scales[1], complexity: 2)  // 단조를 골라도 원곡 장조
+        XCTAssertEqual(kb.map(\.beats), [4, 4, 4, 2, 2, 4, 2, 2, 4, 2, 2])
+        XCTAssertEqual(kb[1].root, 7)
+        XCTAssertEqual(kb[1].bass, 11)  // G/B
+        XCTAssertEqual(kb[1].bassNote, 36 + 11)
+        XCTAssertNil(kb[0].bass)
+        XCTAssertEqual(kb[3].quality.symbol, "min7")  // Gm7 (차용)
+        XCTAssertEqual(kb[4].quality.symbol, "7")  // C7 (세컨더리 도미넌트)
+        XCTAssertEqual(kb[9].quality.symbol, "7sus4")
+        let song = Preview.progression(root: 0, scale: major, prog: ballad, complexity: 2, pattern: .pulse, channels: ChannelMap())
+        XCTAssertEqual(song.totalBeats, 32)
+        // 2박 코드 위의 패턴은 2박 안에서 끝난다 (다음 코드와 겹치지 않음)
+        let gm = song.events.filter { $0.channel == 1 && (12..<14).contains($0.start) }
+        XCTAssertFalse(gm.isEmpty)
+        XCTAssertTrue(gm.allSatisfy { $0.start + $0.length <= 14.001 })
+        // 베이스 채널은 슬래시 베이스를 친다
+        XCTAssertEqual(song.events.first { $0.channel == 2 && $0.start == 4 }?.pitch, 36 + 11)
+        // 고정 텐션은 복잡도만큼 음 수를 자른다: add9 는 3화음에서 maj 로, 9th 부터 add9
+        let lush = Theory.progressions.first { $0.name == "Axis Lush" }!
+        XCTAssertEqual(Theory.chords(of: lush, root: 0, scale: major, complexity: 1)[0].quality.symbol, "maj")
+        XCTAssertEqual(Theory.chords(of: lush, root: 0, scale: major, complexity: 2)[0].quality.symbol, "add9")
+        XCTAssertEqual(Theory.chords(of: lush, root: 0, scale: major, complexity: 1)[1].quality.symbol, "sus4")
+        // 2박 분할만 하는 진행은 없다 (기본 진행과 소리가 같고 빨라질 뿐)
+        XCTAssertFalse(Theory.progressions.contains { $0.name.contains("|") })
+        // 근음 변경(bVII)과 하프디미니시드
+        let mixo = Theory.progressions.first { $0.name == "I–bVII–IV" }!
+        XCTAssertEqual(Theory.chords(of: mixo, root: 2, scale: major, complexity: 1).map(\.root), [2, 0, 7])  // D C G
+        let survive = Theory.progressions.first { $0.name == "I Will Survive" }!
+        XCTAssertEqual(Theory.chords(of: survive, root: 9, scale: major, complexity: 2).map(\.quality.symbol),
+                       ["min7", "min7", "7", "maj7", "maj7", "m7b5", "7", "min7"])
+        // 7alt 처럼 앞부분이 카탈로그에 없는 심볼은 복잡도를 낮추면 도미넌트 패밀리로 떨어진다
+        let tritone = Theory.progressions.first { $0.name == "Tritone Sub" }!
+        XCTAssertEqual(Theory.chords(of: tritone, root: 0, scale: major, complexity: 1).last!.quality.symbol, "maj")
+        XCTAssertEqual(Theory.chords(of: tritone, root: 0, scale: major, complexity: 2).last!.quality.symbol, "7")
+        XCTAssertEqual(Theory.chords(of: tritone, root: 0, scale: major, complexity: 5).last!.quality.symbol, "7alt")
+        for level in 1...Theory.maxComplexity {
+            var r = GenerateRequest(root: 0, scale: Theory.scales[1], bpm: 100, complexity: level, minutes: 1)
+            r.progression = tritone
+            XCTAssertNotNil(Generator.progressionText(r), "복잡도 \(level)")
+            XCTAssertEqual(r.effectiveScale, major)  // 조성 고정 진행은 생성 스케일도 그 조성
+            XCTAssertTrue(Generator.harmonyPrompt(r).contains("scale: Major"))
+        }
+        // 복잡도 1 이면 고정 코드도 3화음
+        XCTAssertTrue(Theory.chords(of: survive, root: 9, scale: major, complexity: 1).allSatisfy { $0.quality.intervals.count == 3 })
+        XCTAssertEqual(Set(Theory.progressions.map(\.name)).count, Theory.progressions.count)
+        // 고정 심볼은 모두 카탈로그에 있어야 한다
+        for p in Theory.progressions {
+            for st in p.steps { if let q = st.quality { XCTAssertNotNil(Theory.quality(named: q), "\(p.name) \(q)") } }
+        }
+        for p in Theory.progressions {
+            XCTAssertFalse(p.summary.isEmpty, p.name)
+            XCTAssertGreaterThanOrEqual(p.totalBeats, 12, p.name)
+            for c in Theory.chords(of: p, root: 5, scale: Theory.scales[7], complexity: 5) {
+                XCTAssertTrue((0..<12).contains(c.root), p.name)
+                XCTAssertTrue(c.quality.intervals.allSatisfy { (0...24).contains($0) }, "\(p.name) \(c.quality.intervals)")
             }
         }
+    }
+
+    func testVoiceLeadingKeepsPitchClassesAndMovesLittle() {
+        let c = [60, 64, 67], g = [67, 71, 74], a = [69, 72, 76], f = [65, 69, 72]
+        let led = Theory.voiceLead([c, g, a, f])
+        for (orig, v) in zip([c, g, a, f], led) {
+            XCTAssertEqual(Set(v.map { $0 % 12 }), Set(orig.map { $0 % 12 }))
+            XCTAssertEqual(v.count, orig.count)
+            XCTAssertTrue(v.first! >= 50 && v.last! <= 86)
+        }
+        // C → G 는 근음 자리 그대로보다 전위(B D G 또는 D G B)가 가깝다: 성부 이동 합이 작아야 한다
+        func move(_ a: [Int], _ b: [Int]) -> Int { zip(a, b).reduce(0) { $0 + abs($1.0 - $1.1) } }
+        XCTAssertLessThan(move(led[0], led[1]), move(c, g))
+        XCTAssertTrue(Theory.voiceLead([]).isEmpty)
+        XCTAssertEqual(Theory.voiceLead([[]]), [[]])
+    }
+
+    func testGrooveAddsBundledDrumsToMelodyAndProgression() {
+        var o = ListenOptions()
+        let riff = Phrase.named("Seven Nation Army")!
+        let dry = Preview.melody(root: 4, scale: Theory.scales[0], phrase: riff, channel: 1, options: o)
+        XCTAssertTrue(dry.events.allSatisfy { $0.channel == 0 })
+        let wet = Preview.melody(root: 4, scale: Theory.scales[0], phrase: riff, channel: 1, drums: riff.drums!, rhythmChannel: 10, options: o)
+        XCTAssertTrue(wet.events.contains { $0.channel == 9 && $0.pitch == DrumPattern.Kit.kick })
+        XCTAssertEqual(wet.totalBeats, 16)
+        XCTAssertTrue(wet.events.filter { $0.channel == 9 }.allSatisfy { $0.start < 16 })
+        // 3박자 프레이즈에는 묶인 드럼이 없다 (Phrase init 불변식). 모델은 phrase.drums ?? .off 를 넘긴다
+        let waltz = Phrase.named("Minuet in G")!
+        XCTAssertNil(waltz.drums)
+        XCTAssertTrue(Preview.melody(root: 0, scale: Theory.scales[0], phrase: waltz, channel: 1, drums: waltz.drums ?? .off, options: o).events.allSatisfy { $0.channel == 0 })
+        o.varyMelody = true
+        o.melodySeed = 3
+        XCTAssertEqual(Preview.melody(root: 4, scale: Theory.scales[0], phrase: riff, channel: 1, options: o).events.count, dry.events.count)
+    }
+
+    func testSwingDrumPatternUsesRideAndPedalHat() {
+        let ev = DrumPattern.swing.notes(start: 0, beats: 4, channel: 9)
+        XCTAssertTrue(ev.contains { $0.pitch == DrumPattern.Kit.ride && abs($0.start - (1 + 2.0 / 3)) < 1e-9 })
+        XCTAssertEqual(ev.filter { $0.pitch == DrumPattern.Kit.pedalHat }.map(\.start), [1, 3])
+        XCTAssertTrue(Generator.stages(GenerateRequest(root: 0, scale: Theory.scales[0], bpm: 120, complexity: 2, minutes: 1, drumPattern: .swing))
+            .starts(with: [.harmony, .rhythm, .bass]))
     }
 
     @MainActor
@@ -264,10 +419,21 @@ final class KeyScoreTests: XCTestCase {
         let dorian = Theory.scales.first { $0.name.contains("Dorian") } ?? Theory.scales[0]
         let ii = Theory.progressions[2]
         let r = GenerateRequest(root: 2, scale: dorian, bpm: 70, complexity: 2, minutes: 0.5,
-                                melodyStyle: .sparse, chordPattern: .tremolo, progression: ii)
+                                phrase: Phrase.named("Long Tones"), chordPattern: .tremolo, progression: ii)
         let prompt = Generator.harmonyPrompt(r)
         XCTAssertTrue(prompt.contains("tremolo"))
-        XCTAssertTrue(Generator.melodyPrompt(r, Self.sample).contains("only 1 or 2 notes per bar"))
+        XCTAssertTrue(Generator.melodyPrompt(r, Self.sample).contains("Density: roughly 1 to 2 notes per bar"))
+        XCTAssertTrue(Generator.melodyPrompt(r, Self.sample).contains("melody character: long sustained notes"))
+        // 프레이즈가 없으면 성격 줄이 없고 기본 밀도를 쓴다
+        var free = r
+        free.phrase = nil
+        XCTAssertFalse(Generator.melodyPrompt(free, Self.sample).contains("melody character"))
+        XCTAssertTrue(Generator.melodyPrompt(free, Self.sample).contains("roughly 2 to 5 notes per bar"))
+        // 한 마디가 아닌 코드는 박 수를, 슬래시 코드는 베이스를 적는다 (원곡 조성 고정이라 D 장조)
+        var modern = r
+        modern.progression = Theory.progressions.first { $0.name == "K-Ballad" }
+        let text = Generator.progressionText(modern)!
+        XCTAssertTrue(text.hasPrefix("D maj7 - A maj7/C# - B min7 - A min7 (2 beats) - D 7 (2 beats) - G maj7"), text)
         XCTAssertTrue(prompt.contains("slow:"))
         XCTAssertTrue(prompt.contains("harmonic backbone"))
         XCTAssertTrue(prompt.contains("2 or 3 sections"))
@@ -286,6 +452,10 @@ final class KeyScoreTests: XCTestCase {
             XCTAssertFalse(ev.isEmpty, p.rawValue)
             XCTAssertTrue(ev.allSatisfy { $0.channel == 9 && (35...59).contains($0.pitch) && $0.start >= 0 && $0.start < 16 }, p.rawValue)
             XCTAssertEqual(ev.filter { $0.pitch == DrumPattern.Kit.crash }.count, 1, p.rawValue)
+            // 오픈 하이햇과 클로즈 하이햇은 초크 그룹이라 같은 tick 에 치지 않는다
+            let open = Set(ev.filter { $0.pitch == DrumPattern.Kit.openHat }.map(\.start))
+            XCTAssertFalse(ev.contains { $0.pitch == DrumPattern.Kit.closedHat && open.contains($0.start) }, p.rawValue)
+            XCTAssertTrue(ev.allSatisfy { $0.start + $0.length <= 16.0001 }, p.rawValue)
         }
         // 마지막 마디가 잘리면 범위를 넘는 타격이 없어야 한다
         XCTAssertTrue(DrumPattern.funk.notes(start: 8, beats: 2, channel: 9).allSatisfy { $0.start < 10 })
@@ -470,6 +640,16 @@ final class KeyScoreTests: XCTestCase {
         }
     }
 
+    func testPhraseGuidesGenerationOnlyWhenEnabled() async {
+        let m = await AppModel()
+        await MainActor.run {
+            XCTAssertFalse(m.phraseGuidesMelody)
+            XCTAssertNil(m.promptSettings.phrase)
+            m.phraseGuidesMelody = true
+            XCTAssertEqual(m.promptSettings.phrase, m.phrase)
+        }
+    }
+
     func testSelectionShiftWrapsAround() async {
         let m = await AppModel()
         await MainActor.run {
@@ -481,10 +661,10 @@ final class KeyScoreTests: XCTestCase {
             XCTAssertEqual(m.chordQualityIndex, 0)
             m.shiftProgression(-1)
             XCTAssertEqual(m.progressionIndex, Theory.progressions.count - 1)
-            m.cycleMelodyStyle(-1)
-            XCTAssertEqual(m.melodyStyle, MelodyStyle.allCases.last)
-            m.cycleMelodyStyle(1)
-            XCTAssertEqual(m.melodyStyle, MelodyStyle.allCases.first)
+            m.cyclePhrase(-1)
+            XCTAssertEqual(m.phrase, Phrase.all.last)
+            m.cyclePhrase(1)
+            XCTAssertEqual(m.phrase, Phrase.all.first)
             m.cycleChordPattern(-1)
             XCTAssertEqual(m.chordPattern, ChordPattern.allCases.last)
         }
