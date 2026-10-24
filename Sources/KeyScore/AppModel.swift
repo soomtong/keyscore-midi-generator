@@ -120,6 +120,7 @@ final class AppModel {
     @ObservationIgnored private var generateTask: Task<Void, Never>?
     /// Keychain 에 들어 있는(또는 환경변수로 받은) 키. 같은 값이면 다시 쓰지 않고, 환경변수 키는 Keychain 에 남기지 않는다.
     @ObservationIgnored private var persistedKey = ""
+    @ObservationIgnored private var terminateObserver: NSObjectProtocol?
 
     var scale: ScaleType { Theory.scales[scaleIndex] }
     var channels: ChannelMap { ChannelMap(melody: melodyChannel, chords: chordChannel, bass: bassChannel, second: secondChannel, rhythm: rhythmChannel) }
@@ -138,6 +139,11 @@ final class AppModel {
         }
         player.onActivity = { [weak self] in
             Task { @MainActor in self?.flashMIDI() }
+        }
+        // ⌘Q 로 끝내도 수신 측 트랜스포트와 울리던 음이 남지 않게
+        let player = player
+        terminateObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+            player.stopNow()
         }
     }
 

@@ -21,6 +21,10 @@ final class MidiPlayer: @unchecked Sendable {
     /// MIDI Clock(0xF8) 은 4분음표당 24 펄스, Song Position Pointer 단위(16분음표)는 6 펄스
     static let clocksPerBeat = 24
     private static let clocksPerSixteenth = 6
+    /// Start/Continue 와 첫 Clock 사이 간격(초). MIDI 1.0 은 수신 측이 준비할 시간으로 1 ms 이상을 권한다.
+    private static let startLead = 0.001
+    /// Clock 과 메시지를 같은 시각으로 보는 오차(초). 펄스 시각(k × step)과 노트 시각(박 × spb)은 몇 ulp 어긋날 수 있다.
+    private static let sameInstant = 1e-6
     private static let log = Logger(subsystem: "dev.soomtong.keyscore", category: "midi")
 
     private let client: MIDIClientRef
@@ -43,6 +47,10 @@ final class MidiPlayer: @unchecked Sendable {
     private var clockStep = 0.0
     private var clockCount = 0
     private var clockIndex = 0
+    /// 수신 측에 Start/Continue 를 보내고 아직 Stop 을 보내지 않았다. Stop 은 이때만 보낸다 (짝 없는 Stop 이 남의 트랜스포트를 세우지 않게).
+    private var running = false
+    /// 이번 바퀴 끝을 앞두고 다음 바퀴의 Start 를 미리 보냈다
+    private var restartSent = false
     /// 재생 회차. stop 알림이 어느 재생에 대한 것인지 구분한다 (정지 직후 새 재생을 시작했을 때 늦게 도착한 알림 무시용).
     private var session = 0
 
@@ -82,7 +90,8 @@ final class MidiPlayer: @unchecked Sendable {
     }
 
     deinit {
-        timer?.cancel()
+        // 큐 작업은 self 를 붙잡으므로 여기까지 오면 큐에 남은 작업이 없다. 울리던 음과 수신 측 트랜스포트를 세우고 정리한다.
+        stopLocked(notify: false)
         outbox.deallocate()
         if source != 0 { MIDIEndpointDispose(source) }
         if client != 0 { MIDIClientDispose(client) }
@@ -104,14 +113,18 @@ final class MidiPlayer: @unchecked Sendable {
             session = id
             index = 0
             clockIndex = 0
+            restartSent = false
             lastProgress = 0
             lastActivity = -1
             if pedal {  // 페달을 밟은 채로 시작
                 for ch in chans { enqueue(0xB0 | ch, 64, 127) }
             }
-            if clockOn { enqueue(0xFA, 0, 0) }  // Start: 다음에 오는 첫 Clock(t = 0)이 곡의 첫 박
+            if clockOn {  // Start: 다음에 오는 첫 Clock(t = 0)이 곡의 첫 박. 그 사이에 startLead 를 둔다.
+                enqueue(0xFA, 0, 0)
+                running = true
+            }
             flush()
-            startNanos = DispatchTime.now().uptimeNanoseconds
+            startNanos = DispatchTime.now().uptimeNanoseconds &+ (running ? UInt64(Self.startLead * 1e9) : 0)
             let t = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
             t.setEventHandler { [weak self] in self?.tick() }
             timer = t
@@ -138,16 +151,19 @@ final class MidiPlayer: @unchecked Sendable {
             clockOn = on
             guard timer != nil else { return }
             if !on {
-                enqueue(0xFC, 0, 0)
+                if running { enqueue(0xFC, 0, 0) }
+                running = false
+                restartSent = false
             } else if clockCount > 0 {
-                let now = Double(DispatchTime.now().uptimeNanoseconds &- startNanos) / 1e9
-                let sixteenth = Int((now / (clockStep * Double(Self.clocksPerSixteenth))).rounded(.up))
+                // Continue 와 첫 펄스 사이에 startLead 이상을 두는 가장 가까운 16분음표
+                let sixteenthSeconds = clockStep * Double(Self.clocksPerSixteenth)
+                let sixteenth = Int((max(0, elapsed + Self.startLead) / sixteenthSeconds).rounded(.up))
                 clockIndex = sixteenth * Self.clocksPerSixteenth
-                // 곡 끝이 더 가까우면 이번 바퀴는 건너뛴다. 반복이면 다음 바퀴의 Start 부터 따라온다.
-                if clockIndex < clockCount {
-                    let spp = min(sixteenth, 0x3FFF)
-                    enqueue(0xF2, UInt8(spp & 0x7F), UInt8(spp >> 7))
+                // 곡 끝이 더 가깝거나 SPP 로 나타낼 수 없는 자리면 이번 바퀴는 건너뛴다. 반복이면 다음 바퀴의 Start 부터 따라온다.
+                if clockIndex < clockCount && sixteenth <= 0x3FFF {
+                    enqueue(0xF2, UInt8(sixteenth & 0x7F), UInt8(sixteenth >> 7))
                     enqueue(0xFB, 0, 0)
+                    running = true
                 }
             }
             flush()
@@ -156,11 +172,19 @@ final class MidiPlayer: @unchecked Sendable {
     }
 
     func setLoop(_ value: Bool) {
-        queue.async { [self] in loop = value }
+        queue.async { [self] in
+            loop = value
+            arm()  // 바퀴 끝과 다음 Start 시각이 반복 여부에 따라 달라진다
+        }
     }
 
     func stop() {
         queue.async { [self] in stopLocked(notify: true) }
+    }
+
+    /// 앱 종료처럼 바로 이어서 프로세스가 끝날 때. 큐에 쌓인 작업을 마친 뒤 Stop 과 Note Off 를 보내고 돌아온다.
+    func stopNow() {
+        queue.sync { stopLocked(notify: false) }
     }
 
     // MARK: 큐 안
@@ -198,39 +222,67 @@ final class MidiPlayer: @unchecked Sendable {
         return Int((min(totalBeats, 1e9) * Double(clocksPerBeat) - 1e-6).rounded(.up))
     }
 
-    /// 다음 Clock 펄스 시각. 꺼져 있거나 이번 바퀴의 펄스를 다 보냈으면 무한대.
-    private var nextClock: Double {
-        clockOn && clockIndex < clockCount ? Double(clockIndex) * clockStep : .infinity
+    /// 재생 시작(startNanos)부터 지난 시간(초). 시작 직전(startLead 안)이면 음수다.
+    private var elapsed: Double {
+        Double(Int64(bitPattern: DispatchTime.now().uptimeNanoseconds &- startNanos)) / 1e9
     }
 
-    /// 다음에 깨어날 시각: 다음 메시지, 다음 Clock, 다음 진행 보고, 곡 끝 중 가장 빠른 것. 1 ms 폴링 대신 필요한 순간에만 깨어난다.
+    /// 다음 Clock 펄스 시각. 수신 측이 멈춰 있거나 이번 바퀴의 펄스를 다 보냈으면 무한대.
+    private var nextClock: Double {
+        running && clockIndex < clockCount ? Double(clockIndex) * clockStep : .infinity
+    }
+
+    /// 반복 재생 한 바퀴의 길이(초). Clock 을 보내면 펄스 격자에 맞춰 올린다 (Legato 여유처럼 곡 길이가 1/24 박 단위가
+    /// 아니어도 바퀴 경계의 펄스 간격이 clockStep 그대로이게). 늘어나는 것은 한 펄스 미만이다.
+    private var cycleSeconds: Double {
+        clockOn && clockCount > 0 ? max(endSeconds, Double(clockCount) * clockStep) : endSeconds
+    }
+
+    /// 다음에 보낼 메시지 시각. 반복 재생이면 바퀴 끝 너머의 메시지는 보내지 않는다 (되감을 때 울리던 음을 끊는다).
+    private func nextMessage(before cycle: Double) -> Double {
+        guard index < messages.count, !loop || messages[index].time < cycle else { return .infinity }
+        return messages[index].time
+    }
+
+    /// 다음 바퀴 Start 를 미리 보낼 시각. 이번 바퀴의 펄스를 다 보낸 뒤, 바퀴 끝보다 startLead 앞.
+    private func restartTime(cycle: Double) -> Double {
+        loop && clockOn && clockCount > 0 && !restartSent ? cycle - Self.startLead : .infinity
+    }
+
+    /// 다음에 깨어날 시각: 다음 메시지, 다음 Clock, 다음 Start, 다음 진행 보고, 곡 끝 중 가장 빠른 것. 1 ms 폴링 대신 필요한 순간에만 깨어난다.
     private func arm() {
         guard let timer else { return }
-        // 곡 끝 처리는 메시지를 다 보낸 뒤에만 한다 (마지막 Note Off 가 endSeconds 를 넘겨도 바쁜 대기에 빠지지 않게).
-        // Clock 펄스는 모두 endSeconds 앞이라 곡 끝을 미루지 않는다.
-        let nextMessage = index < messages.count ? messages[index].time : Double.infinity
-        let finish = index < messages.count ? Double.infinity : endSeconds
-        let next = min(nextMessage, nextClock, lastProgress + Self.progressInterval, finish)
+        let cycle = cycleSeconds
+        // 반복 재생은 바퀴 끝에 바로 되감아 Clock 이 끊기지 않게 한다. 한 번 재생은 메시지를 다 보낸 뒤에만 끝낸다
+        // (마지막 Note Off 가 endSeconds 를 넘겨도 바쁜 대기에 빠지지 않게).
+        let finish = loop ? cycle : index < messages.count ? Double.infinity : endSeconds
+        let next = min(nextMessage(before: cycle), nextClock, restartTime(cycle: cycle), lastProgress + Self.progressInterval, finish)
         let deadline = DispatchTime(uptimeNanoseconds: startNanos &+ UInt64(max(0, next) * 1e9))
         timer.schedule(deadline: deadline, repeating: .never, leeway: .microseconds(100))
     }
 
     private func tick() {
         guard timer != nil else { return }
-        var now = Double(DispatchTime.now().uptimeNanoseconds &- startNanos) / 1e9
+        var now = elapsed
         var sentNote = false
+        let cycle = cycleSeconds
         // 메시지와 Clock 을 시각순으로 섞는다. 같은 시각이면 Clock 이 먼저 나가 수신 측이 그 펄스를 박의 기준으로 삼는다.
         while true {
             let clock = nextClock
-            let message = index < messages.count ? messages[index].time : Double.infinity
+            let message = nextMessage(before: cycle)
             guard min(clock, message) <= now else { break }
-            if clock <= message {
+            if clock <= message + Self.sameInstant {
                 enqueue(0xF8, 0, 0)
                 clockIndex += 1
             } else {
                 sentNote = send(messages[index]) || sentNote
                 index += 1
             }
+        }
+        if nextClock == .infinity, now >= restartTime(cycle: cycle) {
+            enqueue(0xFA, 0, 0)  // 다음 바퀴 Start. 되감은 뒤 t = 0 펄스까지 startLead 가 생긴다.
+            running = true
+            restartSent = true
         }
         flush()
         if sentNote, now - lastActivity >= Self.activityInterval {
@@ -241,17 +293,23 @@ final class MidiPlayer: @unchecked Sendable {
             lastProgress = now
             onProgress?(min(now, endSeconds))
         }
-        if index >= messages.count && now >= endSeconds {
+        if loop ? now >= cycle : index >= messages.count && now >= endSeconds {
             // 길이가 0 인 곡을 반복하면 타이머가 쉬지 않고 돌므로 그냥 끝낸다
-            guard loop, endSeconds > 0 else { return stopLocked(notify: true) }
-            startNanos &+= UInt64(endSeconds * 1e9)
+            guard loop, cycle > 0 else { return stopLocked(notify: true) }
+            // 바퀴 끝을 넘어 울리던 음은 여기서 끊는다. 다음 바퀴가 같은 음을 다시 칠 수 있게 t = 0 메시지보다 먼저.
+            releaseNotes()
+            // 곡이 처음으로 돌아가므로 수신 측도 처음부터 (곡 길이가 마디 단위가 아니어도 마디 위치가 맞는다).
+            // 보통은 바퀴 끝 직전에 이미 보냈다.
+            if clockOn && !restartSent {
+                enqueue(0xFA, 0, 0)
+                running = true
+            }
+            flush()
+            startNanos &+= UInt64(cycle * 1e9)
             index = 0
             clockIndex = 0
-            if clockOn {  // 곡이 처음으로 돌아가므로 수신 측도 처음부터 (곡 길이가 마디 단위가 아니어도 마디 위치가 맞는다)
-                enqueue(0xFA, 0, 0)
-                flush()
-            }
-            now -= endSeconds
+            restartSent = false
+            now -= cycle
             lastProgress = 0
             lastActivity = -1
         }
@@ -262,15 +320,22 @@ final class MidiPlayer: @unchecked Sendable {
         guard let t = timer else { return }
         t.cancel()
         timer = nil
-        if clockOn { enqueue(0xFC, 0, 0) }  // Stop: 수신 측 아르페지에이터·시퀀서를 먼저 세운다
+        if running { enqueue(0xFC, 0, 0) }  // Stop: 수신 측 아르페지에이터·시퀀서를 먼저 세운다
+        running = false
+        restartSent = false
         for ch in usedChannels { enqueue(0xB0 | ch, 64, 0) }  // 페달을 먼저 떼야 울리던 음이 끊긴다
+        releaseNotes()
+        for ch in usedChannels { enqueue(0xB0 | ch, 123, 0) }  // All Notes Off
+        flush()
+        if notify { onStop?(session) }
+    }
+
+    /// 울리고 있는 음마다 Note Off
+    private func releaseNotes() {
         for key in active {
             enqueue(0x80 | UInt8(key >> 8), UInt8(key & 0xFF), 0)
         }
         active.removeAll()
-        for ch in usedChannels { enqueue(0xB0 | ch, 123, 0) }  // All Notes Off
-        flush()
-        if notify { onStop?(session) }
     }
 
     /// Note On 이면 true. 실제 송신은 flush 에서.
@@ -289,7 +354,9 @@ final class MidiPlayer: @unchecked Sendable {
         if outWords >= Self.packetWords { flush() }
         let packet = outPacket ?? MIDIEventListInit(outbox, ._1_0)
         // UMP group 0. MIDI 1.0 Channel Voice 는 type 2, System Common/Real Time(0xF1...0xFF) 은 type 1. 데이터 바이트는 7비트.
-        let type: UInt32 = status >= 0xF0 ? 0x1 : 0x2
+        // SysEx(0xF0, 0xF7)는 UMP type 3 의 여러 워드라 이 경로로 보낼 수 없다.
+        assert(status != 0xF0 && status != 0xF7, "SysEx 는 enqueue 로 보낼 수 없다")
+        let type: UInt32 = status >= 0xF1 ? 0x1 : 0x2
         var word = type << 28 | UInt32(status) << 16 | UInt32(d1 & 0x7F) << 8 | UInt32(d2 & 0x7F)
         outPacket = MIDIEventListAdd(outbox, Self.outboxSize, packet, 0, 1, &word)
         outWords += 1

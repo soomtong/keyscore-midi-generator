@@ -507,7 +507,7 @@ struct ContentView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     OptionLabel("MIDI CLOCK · 템포 동기화")
-                    OptionChip("Send Clock · Start / Stop", key: "", isOn: $m.sendClock)
+                    OptionChip("Send Clock · Start / Stop", isOn: $m.sendClock)
                     Text("켜면 재생을 시작할 때 Start, 재생하는 동안 4분음표당 24 펄스의 Clock, 멈출 때 Stop 을 \"KeyScore\" 로 보냅니다. 가상악기나 DAW 에서 외부 MIDI Clock 동기화를 켜면 아르페지에이터 · LFO · 딜레이가 앱 템포를 따라옵니다. 반복 재생은 처음으로 돌아갈 때마다 Start 를 다시 보냅니다.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1083,9 +1083,9 @@ private struct OptionLabel: View {
 /// 켜고 끄는 옵션 칩
 private struct OptionChip: View {
     let title: String
-    let key: String
+    let key: String?
     @Binding var isOn: Bool
-    init(_ title: String, key: String, isOn: Binding<Bool>) {
+    init(_ title: String, key: String? = nil, isOn: Binding<Bool>) {
         self.title = title
         self.key = key
         _isOn = isOn
@@ -1094,7 +1094,7 @@ private struct OptionChip: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(title).font(.system(size: 11, weight: .medium))
-            if !key.isEmpty {
+            if let key {
                 Text(key).font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(isOn ? Color.white.opacity(0.65) : Color.secondary.opacity(0.55))
             }

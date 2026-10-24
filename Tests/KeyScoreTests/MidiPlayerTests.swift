@@ -195,6 +195,7 @@ final class MidiPlayerTests: XCTestCase {
 
 /// MIDI Clock(0xF8) 과 Start(0xFA) / Continue(0xFB) / Stop(0xFC) / Song Position Pointer(0xF2) 송신.
 private func isSystem(_ m: Receiver.Message) -> Bool { m.status >= 0xF0 }
+private func median(_ xs: some Collection<Double>) -> Double { xs.sorted()[xs.count / 2] }
 
 final class MidiClockTests: XCTestCase {
     func testClockCountCoversOneCycle() {
@@ -299,6 +300,85 @@ final class MidiClockTests: XCTestCase {
         XCTAssertEqual(system.last?.status, 0xFC)
         XCTAssertEqual(system.filter { $0.status == 0xFC }.count, 1)
         XCTAssertTrue(all[afterOff...].filter(isSystem).isEmpty)
+    }
+
+    /// Start(재생 시작과 반복 되감기 모두)와 바로 다음 Clock 사이에 1 ms 가까운 간격이 있다.
+    func testStartLeadsFirstClock() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        player.setClock(true)
+        player.play(Song(title: "lead", bpm: 240, events: [], totalBeats: 1), loop: true)  // 한 바퀴 0.25 초
+        Thread.sleep(forTimeInterval: 0.7)
+        player.stop()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let system = rx.messages.filter(isSystem)
+        let starts = system.indices.filter { system[$0].status == 0xFA }
+        XCTAssertGreaterThanOrEqual(starts.count, 3)
+        // 도착 시각 지터에 흔들리지 않게 중앙값으로 본다
+        let leads = starts.filter { $0 + 1 < system.count && system[$0 + 1].status == 0xF8 }.map { system[$0 + 1].at - system[$0].at }
+        XCTAssertGreaterThan(median(leads), 0.0007, "\(leads.map { Int($0 * 1e6) }) µs")
+    }
+
+    /// 곡 길이가 펄스 격자에 맞지 않아도(1.3 박 → 31.2 펄스) 바퀴 경계의 펄스 간격이 일정하다.
+    func testLoopKeepsClockSpacingOffGrid() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        player.setClock(true)
+        let bpm = 240.0
+        player.play(Song(title: "off-grid", bpm: bpm, events: [], totalBeats: 1.3), loop: true)
+        Thread.sleep(forTimeInterval: 1.2)
+        player.stop()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let system = rx.messages.filter(isSystem).map(\.status)
+        let cycles = system.dropLast().split(separator: 0xFA, omittingEmptySubsequences: false).dropFirst().map(\.count)
+        XCTAssertGreaterThanOrEqual(cycles.count, 3, "\(cycles)")
+        for full in cycles.dropLast() { XCTAssertEqual(full, 32) }
+        let clocks = rx.messages.filter { $0.status == 0xF8 }.map(\.at)
+        let step = 60 / bpm / Double(MidiPlayer.clocksPerBeat)  // 10.4 ms
+        // 펄스는 하나의 격자(i × step) 위에 있어야 한다. 바퀴 경계에서 간격이 줄면(0.8 step) 바퀴마다 8 ms 씩 앞당겨진다.
+        // 도착 시각 지터에 흔들리지 않게 첫 바퀴와 마지막 바퀴의 격자 오프셋 중앙값을 비교한다.
+        let offsets = clocks.enumerated().map { $0.element - Double($0.offset) * step }
+        let drift = median(offsets.suffix(32)) - median(offsets.prefix(32))
+        XCTAssertEqual(drift, 0, accuracy: 0.004, "바퀴를 거치며 펄스 격자가 \(drift * 1000) ms 밀림")
+    }
+
+    /// 반복 재생에서 곡 끝을 넘는 음이 있어도 되감기가 늦어지지 않아 Clock 이 끊기지 않고, 그 음은 되감을 때 끊긴다.
+    func testLoopDoesNotWaitForNotesPastTheEnd() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        player.setClock(true)
+        let bpm = 240.0
+        let long = NoteEvent(channel: 0, pitch: 60, velocity: 90, start: 0, length: 3)  // 곡(1 박)보다 2 박 길다
+        player.play(Song(title: "tail", bpm: bpm, events: [long], totalBeats: 1), loop: true)
+        Thread.sleep(forTimeInterval: 0.9)
+        player.stop()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let clocks = rx.messages.filter { $0.status == 0xF8 }.map(\.at)
+        let step = 60 / bpm / Double(MidiPlayer.clocksPerBeat)
+        // 되감기가 남은 Note Off(0.5 초 뒤)를 기다리면 바퀴마다 그만큼 펄스가 끊긴다
+        let longest = zip(clocks.dropFirst(), clocks).map { $0 - $1 }.max() ?? 0
+        XCTAssertLessThan(longest, step * 4, "Clock 공백 \(longest * 1000) ms")
+        XCTAssertGreaterThanOrEqual(clocks.count, 3 * MidiPlayer.clocksPerBeat)
+        // 바퀴마다 Note On 앞에 앞 바퀴 음의 Note Off 가 온다
+        let notes = rx.messages.filter { $0.status & 0xE0 == 0x80 }.map(\.status)
+        XCTAssertEqual(Array(notes.prefix(5)), [0x90, 0x80, 0x90, 0x80, 0x90])
+    }
+
+    /// 재생 중에 켰는데 이번 바퀴에 남은 펄스가 없으면 Start/Continue 를 보내지 않았으므로 곡 끝에 Stop 도 보내지 않는다.
+    func testSkippedCycleSendsNoUnpairedStop() throws {
+        let player = MidiPlayer()
+        let rx = try XCTUnwrap(Receiver(), "KeyScore 가상 소스를 찾지 못함")
+        // 마지막 Note Off 가 곡 끝(0.25 초)을 넘는다
+        let song = Song(title: "late", bpm: 240, events: [NoteEvent(channel: 0, pitch: 60, velocity: 90, start: 0, length: 2)], totalBeats: 1)
+        player.play(song, loop: false)
+        Thread.sleep(forTimeInterval: 0.35)
+        player.setClock(true)
+        Thread.sleep(forTimeInterval: 0.4)
+        XCTAssertTrue(rx.messages.contains { $0.status == 0x80 }, "곡이 끝나야 한다")
+        XCTAssertTrue(rx.messages.filter(isSystem).isEmpty, "\(rx.messages.filter(isSystem).map(\.status))")
     }
 }
 
